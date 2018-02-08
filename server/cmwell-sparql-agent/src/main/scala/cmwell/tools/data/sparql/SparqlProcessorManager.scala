@@ -279,7 +279,7 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
       val jobConfig = jobStatus.job.config
 
       val title = Seq(s"""<span style="color:green"> **${jobStatus.statusString}** </span> ${path}""")
-      val header = Seq("Sensor", "Token Time", "Received Infotons", "Infoton Rate", "Statistics Updated")
+      val header = Seq("Sensor", "Token Time", "Received Infotons", "Infoton Mean", "Moving Avg", "Statistics Updated")
       val statsFuture = (jobStatus.reporter ? RequestDownloadStats).mapTo[ResponseDownloadStats]
       val storedTokensFuture = (jobStatus.reporter ? RequestPreviousTokens).mapTo[ResponseWithPreviousTokens]
 
@@ -307,7 +307,7 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
               case _ => LocalDateTime.ofInstant(Instant.ofEpochMilli(s.statsTime), ZoneId.systemDefault()).toString
             }
 
-            Seq(s.receivedInfotons.toString, s"${formatter.format(s.infotonRate)}/sec", statsTime)
+            Seq(s.receivedInfotons.toString, s"${formatter.format(s.infotonMean)}/sec", s"${formatter.format(s.infotonMovingAverage)}/sec", statsTime)
           }.getOrElse(Seq.empty[String])
 
           Seq(sensorName, decodedToken) ++ sensorStats
