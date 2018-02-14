@@ -321,16 +321,14 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
         }
         val configName = Paths.get(path).getFileName
 
+        val runningTime = stats.get(s"$configName-${SparqlTriggeredProcessor.sparqlMaterializerLabel}").map(_.runningTime).getOrElse(0L)
+
         val sparqlIngestStats = statsIngest.get(s"ingester-$configName").map { s =>
-          s"""Ingested <span style="color:green"> **${s.ingestedInfotons}** </span> Failed <span style="color:red"> **${s.failedInfotons}** </span>""".stripMargin
+          val totalRunTime = DurationFormatUtils.formatDurationWords(runningTime, true, true)
+          s"""Ingested infotons <span style="color:green"> **${s.ingestedInfotons}** </span> Failed infotons <span style="color:red"> **${s.failedInfotons}** [$totalRunTime] </span>""".stripMargin
         }.getOrElse("")
 
-        val sparqlMaterializerStats = stats.get(s"$configName-${SparqlTriggeredProcessor.sparqlMaterializerLabel}").map { s =>
-          val totalRunTime = DurationFormatUtils.formatDurationWords(s.runningTime, true, true)
-          s"""Materialized <span style="color:green"> **${s.receivedInfotons}** </span> infotons [$totalRunTime]""".stripMargin
-        }.getOrElse("")
-
-        Table(title = title :+ sparqlMaterializerStats :+ sparqlIngestStats, header = header, body = body)
+        Table(title = title :+ sparqlIngestStats, header = header, body = body)
       }
     }
 
