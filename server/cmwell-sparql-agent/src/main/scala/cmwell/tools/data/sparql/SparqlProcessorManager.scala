@@ -263,9 +263,11 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
       val header = Seq("Sensor", "Token Time")
 
       StpUtil.readPreviousTokens(settings.hostConfigFile, settings.pathAgentConfigs + "/" + path, "ntriples").map { storedTokens =>
+
         val pathsWithoutSavedToken = sensorNames.toSet diff storedTokens.keySet
-        val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> "")
-        val body : Iterable[Row] = allSensorsWithTokens.map { case (sensorName, token) =>
+        val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("",None,None))
+
+        val body : Iterable[Row] = allSensorsWithTokens.map { case (sensorName, (token,a,b)) =>
           val decodedToken = if (token.nonEmpty) {
             val from = cmwell.tools.data.utils.text.Tokens.getFromIndexTime(token)
             LocalDateTime.ofInstant(Instant.ofEpochMilli(from), ZoneId.systemDefault()).toString
@@ -301,9 +303,11 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
       } yield {
         val sensorNames = jobConfig.sensors.map(_.name)
         val pathsWithoutSavedToken = sensorNames.toSet diff storedTokens.keySet
-        val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> "")
+        val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("",None,None))
 
-        val body : Iterable[Row] = allSensorsWithTokens.map { case (sensorName, token) =>
+
+
+        val body : Iterable[Row] = allSensorsWithTokens.map { case (sensorName, (token, _,_)) =>
           val decodedToken = if (token.nonEmpty) {
             Tokens.getFromIndexTime(token) match{
               case 0 => ""

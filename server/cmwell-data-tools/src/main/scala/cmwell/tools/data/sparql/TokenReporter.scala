@@ -26,6 +26,8 @@ import akka.pattern._
 import akka.stream.scaladsl._
 import akka.stream.{ActorMaterializer, Materializer}
 import cmwell.tools.data.downloader.consumer.Downloader.Token
+import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
+import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.logging.DataToolsLogging
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -42,9 +44,9 @@ trait SparqlTriggerProcessorReporter {
 
   /**
     * Store given tokens for a future usage (e.g., in a non-volatile memory)
-    * @param tokens tokens to be saved
+    * @param tokensAndStats tokens with current statistics to be saved
     */
-  def saveTokens(tokens: Map[String, Token]): Unit
+  def saveTokens(tokensAndStats: Map[String, (Token,Option[DownloadStats],Option[IngestStats])]): Unit
 }
 
 
@@ -64,10 +66,17 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080) extends 
 
   def receiveWithMap(tokens: Map[String, Token]): Receive = {
     case RequestPreviousTokens =>
-      sender() ! ResponseWithPreviousTokens(tokens)
+      sender() ! ResponseWithPreviousTokens(tokens.map{
+        //TODO this nees looking at Nick Lester
+        case (sensor,token) => sensor -> (token, null,null)
+      })
     case ReportNewToken(sensor, token) =>
       val updatedTokens = tokens + (sensor -> token)
-      saveTokens(updatedTokens)
+      //TODO this nees looking at Nick Lester
+      saveTokens(updatedTokens.map{
+        case (sensor, token) => (sensor -> (token,null,null))
+      })
+
       context.become(receiveWithMap(updatedTokens))
     case RequestReference(path) =>
       val data = getReferencedData(path)
@@ -86,8 +95,8 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080) extends 
 
   override def getReferencedData(path: String): Future[String] = Future.successful(scala.io.Source.fromFile(path).mkString)
 
-  override def saveTokens(tokens: Map[String, Token]): Unit =
-    path.foreach(p => Files.write(p, tokens.mkString("\n").getBytes("UTF-8")))
+  override def saveTokens(tokensAndStats: Map[String, (Token,Option[DownloadStats],Option[IngestStats])]): Unit =
+    path.foreach(p => Files.write(p, tokensAndStats.mkString("\n").getBytes("UTF-8")))
 }
 
 class WebExporter(reporter: ActorRef, port: Int = 8080)(implicit system: ActorSystem, mat: Materializer) {
@@ -119,7 +128,7 @@ class WebExporter(reporter: ActorRef, port: Int = 8080)(implicit system: ActorSy
         val (content, _) = tokens.foldLeft("" -> false) { case ((agg, evenRow), (sensor, token)) =>
           val style = if (evenRow) "tg-j2zy" else "tg-yw4l"
 
-          val decoded = cmwell.tools.data.utils.text.Tokens.decompress(token)
+          val decoded = cmwell.tools.data.utils.text.Tokens.decompress(token._1)
           val timestamp = DateTime(decoded.takeWhile(_ != '|').toLong)
 
           val row =
@@ -160,8 +169,11 @@ class WebExporter(reporter: ActorRef, port: Int = 8080)(implicit system: ActorSy
   }
 }
 
+case object RequestPreviousStatistics
 case object RequestPreviousTokens
-case class ResponseWithPreviousTokens(tokens: Map[String, Token])
+
+case class ResponseWithPreviousTokens(tokens: Map[String, (Token, Option[DownloadStats], Option[IngestStats])])
+//case class ReponseWithPreviousStats(stats: Map[String,(DownloadStats,IngestStats))
 case class ReportNewToken(sensor: String, token: Token)
 case class RequestReference(path: String)
 case class ResponseReference(data: String)

@@ -66,7 +66,10 @@ class InfotonReporter private(baseUrl: String, path: String)(implicit mat: Mater
     case RequestPreviousTokens =>
       context.become(receiveBeforeInitializes(sender() :: recipients))
 
-    case Success(savedTokens: Map[String, Token]) =>
+    case RequestPreviousStatistics =>
+      context.become(receiveBeforeInitializes(sender() :: recipients))
+
+    case Success(savedTokens: Map[String, (Token,Option[DownloadStats],Option[IngestStats])]) =>
       recipients.foreach(_ ! ResponseWithPreviousTokens(savedTokens))
       context.become(receiveWithMap(savedTokens))
 
@@ -91,12 +94,12 @@ class InfotonReporter private(baseUrl: String, path: String)(implicit mat: Mater
       data.map(ResponseReference.apply) pipeTo sender()
   }
 
-  def receiveWithMap(tokens: Map[String, Token]): Receive = {
+  def receiveWithMap(tokensAndStats: Map[String, (Token,Option[DownloadStats],Option[IngestStats])]): Receive = {
     case RequestPreviousTokens =>
-      sender() ! ResponseWithPreviousTokens(tokens)
+      sender() ! ResponseWithPreviousTokens(tokensAndStats)
 
     case ReportNewToken(sensor, token) =>
-      val updatedTokens = tokens + (sensor -> token)
+      val updatedTokens = tokensAndStats + (sensor -> (token, downloadStats.get(sensor),ingestStats.get(sensor)))
       saveTokens(updatedTokens)
       context.become(receiveWithMap(updatedTokens))
 
@@ -123,19 +126,28 @@ class InfotonReporter private(baseUrl: String, path: String)(implicit mat: Mater
       .map(_.payload)
   }
 
-  override def saveTokens(tokens: Map[String, Token]): Unit = {
-    def createRequest(tokens: Map[String, Token]) = {
-      val data = HttpEntity(tokens.foldLeft(Seq.empty[String]){case (agg,(sensor, token)) => agg :+ createTriple(sensor, token) }.mkString("\n"))
+
+  override def saveTokens(tokensAndStats: Map[String, (Token,Option[DownloadStats],Option[IngestStats])]): Unit = {
+
+    def createRequest(tokensStats: Map[String, (Token, Option[DownloadStats],Option[IngestStats])]) = {
+      val data = HttpEntity(tokensStats.foldLeft(Seq.empty[String]) { case (agg, (sensor, (token, downloadStats, ingestStats))) => agg ++ createTriples(sensor, token, downloadStats, ingestStats) }.mkString("\n"))
       HttpRequest(uri = s"http://$host:$port/_in?format=$format&replace-mode", method = HttpMethods.POST, entity = data)
         .addHeader(RawHeader("X-CM-WELL-TOKEN", writeToken))
     }
 
-    def createTriple(sensor: String, token: Token) = {
+    def createTriples(sensor: String, token: Token, downloadStats: Option[DownloadStats], ingestStats: Option[IngestStats]) = {
       val p = if (path startsWith "/") path.tail else path
-      s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#token> "$token" ."""
+
+      downloadStats.map { s =>
+        Seq(s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#receivedInfotons> "${s.receivedInfotons}" .""")
+      }.getOrElse(Seq.empty[String]) ++ ingestStats.map { s =>
+        Seq(s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#failedInfotons> "${s.failedInfotons}" .""",
+          s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#ingestedInfotons> "${s.ingestedInfotons}" .""")
+      }.getOrElse(Seq.empty[String]) :+ s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#token> "$token" ."""
+
     }
 
-    Source.single(tokens)
+    Source.single(tokensAndStats)
       .map(createRequest)
       .via(Http(context.system).outgoingConnection(host, port))
       .map {
@@ -147,5 +159,48 @@ class InfotonReporter private(baseUrl: String, path: String)(implicit mat: Mater
           e.discardBytes()
       }
       .runWith(Sink.ignore)
+
   }
+
+  /*
+  override def saveTokens(tokens: Map[String, Token], downloadStats: Map[String, DownloadStats], ingestStats: Map[String,IngestStats]): Unit = {
+
+    def mergeMaps(tokens: Map[String, Token], downloadStats: Map[String, DownloadStats], ingestStats: Map[String,IngestStats]) = tokens.map{
+      case (sensor, token) => sensor -> (token, downloadStats.get(sensor), ingestStats.get(sensor))
+    }
+
+    def createRequest(tokensStats: Map[String, (Token, Option[DownloadStats],Option[IngestStats])]) = {
+      val data = HttpEntity(tokensStats.foldLeft(Seq.empty[String]) { case (agg, (sensor, (token, downloadStats, ingestStats))) => agg ++ createTriples(sensor, token, downloadStats, ingestStats) }.mkString("\n"))
+      HttpRequest(uri = s"http://$host:$port/_in?format=$format&replace-mode", method = HttpMethods.POST, entity = data)
+        .addHeader(RawHeader("X-CM-WELL-TOKEN", writeToken))
+    }
+
+    def createTriples(sensor: String, token: Token, downloadStats: Option[DownloadStats], ingestStats: Option[IngestStats]) = {
+      val p = if (path startsWith "/") path.tail else path
+
+      downloadStats.map { s =>
+        Seq(s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#receivedInfotons> "${s.receivedInfotons}" .""")
+      }.getOrElse(Seq.empty[String]) ++ ingestStats.map { s =>
+        Seq(s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#failedInfotons> "${s.failedInfotons}" .""",
+          s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#ingestedInfotons> "${s.ingestedInfotons}" .""")
+      }.getOrElse(Seq.empty[String]) :+ s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#token> "$token" ."""
+
+    }
+
+    Source.single(mergeMaps(tokens,downloadStats, ingestStats))
+      .map(createRequest)
+      .via(Http(context.system).outgoingConnection(host, port))
+      .map {
+        case HttpResponse(s, h, e, _) if s.isSuccess() =>
+          logger.debug(s"successfully written tokens infoton to $path")
+          e.discardBytes()
+        case HttpResponse(s, h, e, _)  =>
+          logger.error(s"problem writing tokens infoton to $path")
+          e.discardBytes()
+      }
+      .runWith(Sink.ignore)
+
+  }
+  */
+
 }
