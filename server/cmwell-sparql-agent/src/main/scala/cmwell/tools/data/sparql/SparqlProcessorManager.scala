@@ -24,6 +24,7 @@ import akka.stream._
 import akka.stream.scaladsl._
 import akka.util.Timeout
 import cmwell.ctrl.checkers.StpChecker.{RequestStats, ResponseStats, Row, Table}
+import cmwell.tools.data.downloader.consumer.Downloader.Token
 import cmwell.tools.data.ingester._
 import cmwell.tools.data.sparql.InfotonReporter.{RequestDownloadStats, RequestIngestStats, ResponseDownloadStats, ResponseIngestStats}
 import cmwell.tools.data.sparql.SparqlProcessorManager._
@@ -44,7 +45,7 @@ import net.jcazevedo.moultingyaml._
 import org.apache.commons.lang3.time.DurationFormatUtils
 import io.circe.Json
 
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.concurrent.duration.{FiniteDuration, _}
 import scala.util.{Failure, Success, Try}
 import ExecutionContext.Implicits.global
@@ -372,6 +373,8 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
     )
 
     val label = Some(s"ingester-${job.name}")
+
+//    StpUtil.readIngestStatistics(settings.hostConfigFile, settings.pathAgentConfigs + "/" + path, "ntriples" )
 
     val hostUpdatesSource = job.config.hostUpdatesSource.getOrElse(settings.hostUpdatesSource)
 

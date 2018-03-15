@@ -33,6 +33,7 @@ import cmwell.tools.data.utils.logging.DataToolsLogging
 import scala.concurrent.{ExecutionContext, Future}
 
 trait SparqlTriggerProcessorReporter {
+
   /**
     * Reads a referenced data from sparql-triggered-processor config file.
     * Referenced data is a path starts with '@' character
@@ -66,21 +67,19 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080) extends 
 
   def receiveWithMap(tokens: Map[String, Token]): Receive = {
     case RequestPreviousTokens =>
-      sender() ! ResponseWithPreviousTokens(tokens.map{
-        //TODO this nees looking at Nick Lester
-        case (sensor,token) => sensor -> (token, null,null)
+      sender() ! ResponseWithPreviousTokens(tokens.map {
+        case (sensor, token) => sensor -> (token, None, None)
       })
     case ReportNewToken(sensor, token) =>
       val updatedTokens = tokens + (sensor -> token)
-      //TODO this nees looking at Nick Lester
-      saveTokens(updatedTokens.map{
-        case (sensor, token) => (sensor -> (token,null,null))
+      saveTokens(updatedTokens.map {
+        case (sensor, token) => (sensor -> (token, None, None))
       })
 
       context.become(receiveWithMap(updatedTokens))
     case RequestReference(path) =>
       val data = getReferencedData(path)
-//      sender() ! ResponseReference(data)
+      //      sender() ! ResponseReference(data)
       data.map(ResponseReference.apply) pipeTo sender()
   }
 
@@ -95,8 +94,12 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080) extends 
 
   override def getReferencedData(path: String): Future[String] = Future.successful(scala.io.Source.fromFile(path).mkString)
 
-  override def saveTokens(tokensAndStats: Map[String, (Token,Option[DownloadStats],Option[IngestStats])]): Unit =
-    path.foreach(p => Files.write(p, tokensAndStats.mkString("\n").getBytes("UTF-8")))
+  override def saveTokens(tokensAndStats: TokenAndStatisticsMap): Unit = {
+    val tokens = tokensAndStats.map {
+      case (sensor, (token, _, _)) => sensor -> token
+    }
+    path.foreach(p => Files.write(p, tokens.mkString("\n").getBytes("UTF-8")))
+  }
 }
 
 class WebExporter(reporter: ActorRef, port: Int = 8080)(implicit system: ActorSystem, mat: Materializer) {
@@ -172,8 +175,7 @@ class WebExporter(reporter: ActorRef, port: Int = 8080)(implicit system: ActorSy
 case object RequestPreviousStatistics
 case object RequestPreviousTokens
 
-case class ResponseWithPreviousTokens(tokens: Map[String, (Token, Option[DownloadStats], Option[IngestStats])])
-//case class ReponseWithPreviousStats(stats: Map[String,(DownloadStats,IngestStats))
+case class ResponseWithPreviousTokens(tokens: TokenAndStatisticsMap)
 case class ReportNewToken(sensor: String, token: Token)
 case class RequestReference(path: String)
 case class ResponseReference(data: String)

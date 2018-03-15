@@ -21,11 +21,8 @@ import akka.pattern._
 import akka.stream.scaladsl.{GraphDSL, Merge, Source}
 import akka.stream.{Materializer, SourceShape}
 import akka.util.ByteString
-import cmwell.tools.data.downloader.consumer.Downloader.Token
 import cmwell.tools.data.downloader.consumer.{Downloader => Consumer}
 import cmwell.tools.data.utils.akka.stats.DownloaderStats
-import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
-import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.logging.DataToolsLogging
 import cmwell.tools.data.utils.text.Tokens
 
@@ -86,26 +83,31 @@ class SparqlTriggeredProcessor(config: Config,
 
   def listen()(implicit system: ActorSystem, mat: Materializer, ec: ExecutionContext) = {
 
-    def addStatsToSource(id: String, source: Source[(ByteString, Option[SensorContext]), _], statsAndTokens: Map[String, (Token, Option[DownloadStats], Option[IngestStats])]) = {
-      source.via(DownloaderStats(format = "ntriples", label = Some(id), reporter = tokenReporter, statsAndTokens=statsAndTokens))
+    def addStatsToSource(id: String, source: Source[(ByteString, Option[SensorContext]), _], initialDownloadStats: Option[TokenAndStatisticsMap]) = {
+      source.via(DownloaderStats(format = "ntriples", label = Some(id), reporter = tokenReporter, initialDownloadStats = {
+        getSavedSensorTokensAndStatistics.get(id).map { sensor =>
+          sensor._2
+        }.getOrElse(None)
+      }))
+
     }
 
-    def getSavedTokens(): Map[String, (Token, Option[DownloadStats], Option[IngestStats])] = tokenReporter match {
-      case None => Map.empty[String, (Token, Option[DownloadStats], Option[IngestStats])]
+    def getSavedSensorTokensAndStatistics() : TokenAndStatisticsMap = tokenReporter match {
+      case None => Map.empty[String, TokenAndStatistics]
       case Some(reporter) =>
         import akka.pattern._
         implicit val t = akka.util.Timeout(1.minute)
         val result = (reporter ? RequestPreviousTokens).mapTo[ResponseWithPreviousTokens]
           .map {
             case ResponseWithPreviousTokens(tokens) => tokens
-            case x => logger.error(s"did not receive previous tokens: $x"); Map.empty[String, (Token, Option[DownloadStats], Option[IngestStats])]
+            case x => logger.error(s"did not receive previous tokens: $x"); Map.empty[String, TokenAndStatistics]
           }
 
         Await.result(result, 1.minute)
     }
 
-    var savedTokens = getSavedTokens().map {
-      case (sensor, (token, a,b)) => sensor->token
+    var savedTokens = getSavedSensorTokensAndStatistics.map {
+      case (sensor, (token, _, _)) => sensor -> token
     }
 
     def getReferencedData(path: String) = tokenReporter match {
@@ -187,7 +189,9 @@ class SparqlTriggeredProcessor(config: Config,
                     ???
                 }
 
-              addStatsToSource(id = sensor.name, source = tsvSource, statsAndTokens = getSavedTokens())
+
+              addStatsToSource(id = sensor.name, source = tsvSource, initialDownloadStats = Option(getSavedSensorTokensAndStatistics))
+
             }
 
           // get root infoton
@@ -227,7 +231,7 @@ class SparqlTriggeredProcessor(config: Config,
     val processedConfig = Await.result(preProcessConfig(config), 3.minutes)
 
     val sensorSource = createSensorSource(processedConfig)
-      .groupedWithin(10000, distinctWindowSize)
+      .groupedWithin(10000, 10.second)
       .statefulMapConcat{ () =>
         // stores last received tokens from sensors
         sensorData => {
@@ -260,7 +264,7 @@ class SparqlTriggeredProcessor(config: Config,
     // execute sparql queries on populated paths
     addStatsToSource (
       id = label.map(_ + "-").getOrElse("") + SparqlTriggeredProcessor.sparqlMaterializerLabel,
-      statsAndTokens = getSavedTokens(),
+      initialDownloadStats = Option(getSavedSensorTokensAndStatistics),
       source = SparqlProcessor.createSparqlSourceFromPaths(
           baseUrl = baseUrl,
           sparqlQuery = processedConfig.sparqlMaterializer,

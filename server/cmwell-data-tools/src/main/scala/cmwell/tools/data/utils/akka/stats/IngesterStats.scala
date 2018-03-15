@@ -31,22 +31,24 @@ import scala.concurrent.duration._
 object IngesterStats {
 
   case class IngestStats(label: Option[String] = None,
-                         ingestedBytes: Long,
-                         ingestedInfotons: Long,
-                         failedInfotons: Long)
+                         ingestedBytes: Long = 0,
+                         ingestedInfotons: Long = 0,
+                         failedInfotons: Long = 0)
 
   def apply(isStderr: Boolean = false,
             initDelay: FiniteDuration = 1.second,
             interval: FiniteDuration = 1.second,
             reporter: Option[ActorRef] = None,
-            label: Option[String] = None) = new IngesterStats(isStderr, initDelay, interval, reporter, label)
+            label: Option[String] = None,
+            initStats: Option[IngestStats]=None) = new IngesterStats(isStderr, initDelay, interval, reporter, label)
 }
 
 class IngesterStats(isStderr: Boolean,
                     initDelay: FiniteDuration = 1.second,
                     interval: FiniteDuration = 1.second,
                     reporter: Option[ActorRef] = None,
-                    label: Option[String] = None) extends GraphStage[FlowShape[IngestEvent, IngestEvent]] with DataToolsLogging{
+                    label: Option[String] = None,
+                    initStats: Option[IngestStats] = None) extends GraphStage[FlowShape[IngestEvent, IngestEvent]] with DataToolsLogging{
   val in = Inlet[IngestEvent]("ingest-stats.in")
   val out = Outlet[IngestEvent]("ingest-stats.out")
   override val shape = FlowShape.of(in, out)
@@ -73,6 +75,11 @@ class IngesterStats(isStderr: Boolean,
       val formatter = java.text.NumberFormat.getNumberInstance
 
       override def preStart(): Unit = {
+
+        initStats.map { stats =>
+          totalIngestedInfotons mark stats.ingestedInfotons
+        }
+
         asyncCB = getAsyncCallback{ _ =>
           displayStats()
           resetStats()

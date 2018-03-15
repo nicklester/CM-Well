@@ -20,10 +20,8 @@ import akka.actor.{ActorRef, _}
 import akka.stream._
 import akka.stream.stage._
 import akka.util.ByteString
-import cmwell.tools.data.downloader.consumer.Downloader.Token
-import cmwell.tools.data.sparql.{RequestPreviousStatistics, ResponseWithPreviousTokens, SensorContext}
+import cmwell.tools.data.sparql.SensorContext
 import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
-import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.logging.DataToolsLogging
 import cmwell.tools.data.utils.text.Files.toHumanReadable
 import nl.grons.metrics4.scala.InstrumentedBuilder
@@ -50,9 +48,9 @@ object DownloaderStats {
             reporter: Option[ActorRef] = None,
             initDelay: FiniteDuration = 1.second,
             interval: FiniteDuration = 1.second,
-            statsAndTokens: Map[String,(Token,Option[DownloadStats],Option[IngestStats])]) = {
+            initialDownloadStats: Option[DownloadStats] = None) = {
 
-    new DownloaderStats(isStderr, format, label, reporter, initDelay, interval, statsAndTokens)
+    new DownloaderStats(isStderr, format, label, reporter, initDelay, interval, initialDownloadStats)
 
   }
 }
@@ -63,7 +61,7 @@ class DownloaderStats(isStderr: Boolean,
                       reporter: Option[ActorRef] = None,
                       initDelay: FiniteDuration = 1.second,
                       interval: FiniteDuration = 1.second,
-                      statsAndTokens: Map[String,(Token,Option[DownloadStats],Option[IngestStats])]) extends GraphStage[FlowShape[(ByteString, Option[SensorContext]), (ByteString, Option[SensorContext])]] with DataToolsLogging {
+                      initialDownloadStats: Option[DownloadStats] = None) extends GraphStage[FlowShape[(ByteString, Option[SensorContext]), (ByteString, Option[SensorContext])]] with DataToolsLogging {
 
   val in = Inlet[(ByteString, Option[SensorContext])]("download-stats.in")
   val out = Outlet[(ByteString, Option[SensorContext])]("download-stats.out")
@@ -93,26 +91,16 @@ class DownloaderStats(isStderr: Boolean,
       val formatter = java.text.NumberFormat.getNumberInstance
 
       override def preStart(): Unit = {
-/*
-        def getPreviousStatistics() = reporter match {
 
-          case None => None
-          case Some(reporter) => {
-            import akka.pattern._
-            implicit val t = akka.util.Timeout(1.minute)
-            val stats = (reporter ? RequestPreviousStatistics).mapTo[ReponseWithPreviousStats].map {
-              case ReponseWithPreviousStats(stats) => stats
-              case x => logger.error(s"did not receive previous statistics: $x"); Map.empty[String, (DownloadStats,IngestStats)]
-            }
-          }
+        def setPreviousStatistics() : Unit = {
+          initialDownloadStats.map { stats=> totalReceivedInfotons mark stats.receivedInfotons }
         }
 
-        getPreviousStatistics()
-*/
+        setPreviousStatistics
+
         asyncCB = getAsyncCallback{ _ =>displayStats()
           resetStatsInWindow()
         }
-
 
         eventPoller = Some(materializer.schedulePeriodically(initDelay, interval, new Runnable() {def run() = asyncCB.invoke(())}))
 
