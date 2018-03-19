@@ -31,9 +31,9 @@ import scala.concurrent.duration._
 object IngesterStats {
 
   case class IngestStats(label: Option[String] = None,
-                         ingestedBytes: Long = 0,
-                         ingestedInfotons: Long = 0,
-                         failedInfotons: Long = 0)
+                         ingestedBytes: Long,
+                         ingestedInfotons: Long,
+                         failedInfotons: Long)
 
   def apply(isStderr: Boolean = false,
             initDelay: FiniteDuration = 1.second,
