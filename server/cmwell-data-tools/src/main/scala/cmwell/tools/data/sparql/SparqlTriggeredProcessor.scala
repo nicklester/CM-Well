@@ -83,7 +83,7 @@ class SparqlTriggeredProcessor(config: Config,
 
   def listen()(implicit system: ActorSystem, mat: Materializer, ec: ExecutionContext) = {
 
-    def addStatsToSource(id: String, source: Source[(ByteString, Option[SensorContext]), _], initialDownloadStats: Option[TokenAndStatisticsMap]) = {
+    def addStatsToSource(id: String, source: Source[(ByteString, Option[SensorContext]), _], initialDownloadStats: Option[TokenAndStatisticsMap] = None) = {
       source.via(DownloaderStats(format = "ntriples", label = Some(id), reporter = tokenReporter, initialDownloadStats = {
         getSavedSensorTokensAndStatistics.get(id).map { sensor =>
           sensor._2
@@ -107,7 +107,7 @@ class SparqlTriggeredProcessor(config: Config,
     }
 
     var savedTokens = getSavedSensorTokensAndStatistics.map {
-      case (sensor, (token, _, _)) => sensor -> token
+      case (sensor, (token, _)) => sensor -> token
     }
 
     def getReferencedData(path: String) = tokenReporter match {
@@ -264,7 +264,6 @@ class SparqlTriggeredProcessor(config: Config,
     // execute sparql queries on populated paths
     addStatsToSource (
       id = label.map(_ + "-").getOrElse("") + SparqlTriggeredProcessor.sparqlMaterializerLabel,
-      initialDownloadStats = Option(getSavedSensorTokensAndStatistics),
       source = SparqlProcessor.createSparqlSourceFromPaths(
           baseUrl = baseUrl,
           sparqlQuery = processedConfig.sparqlMaterializer,

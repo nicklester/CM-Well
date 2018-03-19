@@ -21,7 +21,6 @@ import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.{ActorMaterializer, Materializer}
 import akka.pattern._
 import akka.stream.scaladsl.{Sink, Source}
-import cmwell.driver.Dao
 import cmwell.tools.data.downloader.consumer.Downloader.Token
 import cmwell.tools.data.sparql.InfotonReporter._
 import cmwell.tools.data.utils.ArgsManipulations
@@ -30,7 +29,6 @@ import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
 import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.logging.DataToolsLogging
 import com.typesafe.config.ConfigFactory
-import cmwell.zstore.ZStore
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
@@ -63,19 +61,6 @@ class InfotonReporter private(baseUrl: String, path: String)(implicit mat: Mater
 
   override val receive: Receive = receiveBeforeInitializes(Nil) //receiveWithMap(Map.empty)
 
-  val casDao = {
-    val irwServiceDaoClusterName = config.getString("irwServiceDao.clusterName")
-    val irwServiceDaoKeySpace = config.getString("irwServiceDao.keySpace")
-    val irwServiceDaoHostName = config.getString("irwServiceDao.hostName")
-    Dao(irwServiceDaoClusterName, irwServiceDaoKeySpace, irwServiceDaoHostName)
-  }
-
-  val zStore = ZStore(casDao)
-
-  def storeIngestStatsinZStore(ingestStats: IngestStats) = {
-    zStore.put(ingestStats.label.get, "ff".toArray[Byte])
-  }
-
   def receiveBeforeInitializes(recipients: List[ActorRef]) : Receive= {
     case RequestPreviousTokens =>
       context.become(receiveBeforeInitializes(sender() :: recipients))
@@ -91,7 +76,6 @@ class InfotonReporter private(baseUrl: String, path: String)(implicit mat: Mater
       downloadStats += (s.label.getOrElse("") -> s)
 
     case ingest:IngestStats =>
-      storeIngestStatsinZStore(ingest)
       ingestStats += (ingest.label.getOrElse("") -> ingest)
 
     case RequestDownloadStats =>
@@ -114,7 +98,7 @@ class InfotonReporter private(baseUrl: String, path: String)(implicit mat: Mater
       sender() ! ResponseWithPreviousTokens(tokensAndStats)
 
     case ReportNewToken(sensor, token) =>
-      val updatedTokens = tokensAndStats + (sensor -> (token, downloadStats.get(sensor), ingestStats.get("ingester-" + name)))
+      val updatedTokens = tokensAndStats + (sensor -> (token, downloadStats.get(sensor)))
       saveTokens(updatedTokens)
       context.become(receiveWithMap(updatedTokens))
 
@@ -145,12 +129,12 @@ class InfotonReporter private(baseUrl: String, path: String)(implicit mat: Mater
     override def saveTokens(tokenAndStatistics: TokenAndStatisticsMap) : Unit = {
 
     def createRequest(tokensStats: TokenAndStatisticsMap) = {
-      val data = HttpEntity(tokensStats.foldLeft(Seq.empty[String]) { case (agg, (sensor, (token, downloadStats, ingestStats))) => agg ++ createTriples(sensor, token, downloadStats, ingestStats) }.mkString("\n"))
+      val data = HttpEntity(tokensStats.foldLeft(Seq.empty[String]) { case (agg, (sensor, (token, downloadStats))) => agg ++ createTriples(sensor, token, downloadStats) }.mkString("\n"))
       HttpRequest(uri = s"http://$host:$port/_in?format=$format&replace-mode", method = HttpMethods.POST, entity = data)
         .addHeader(RawHeader("X-CM-WELL-TOKEN", writeToken))
     }
 
-    def createTriples(sensor: String, token: Token, downloadStats: Option[DownloadStats], ingestStats: Option[IngestStats]) = {
+    def createTriples(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
       val p = if (path startsWith "/") path.tail else path
 
       downloadStats.map { s =>

@@ -55,18 +55,11 @@ object StpUtil {
               }
 
               val sensor = extractLastPart(json.hcursor.downField("system").get[String]("path").toOption.get)
-              sensor -> (token,receivedInfotons,None)
+              sensor -> (token,receivedInfotons)
             }
           }
         }).foldLeft(Map.empty[String,TokenAndStatistics])(_ + _)
       })
   }
-
-
-  def loadIngestStatsFromZStore() = {
-
-  }
-
-
 
 }

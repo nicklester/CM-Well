@@ -47,7 +47,7 @@ trait SparqlTriggerProcessorReporter {
     * Store given tokens for a future usage (e.g., in a non-volatile memory)
     * @param tokensAndStats tokens with current statistics to be saved
     */
-  def saveTokens(tokensAndStats: Map[String, (Token,Option[DownloadStats],Option[IngestStats])]): Unit
+  def saveTokens(tokensAndStats: TokenAndStatisticsMap): Unit
 }
 
 
@@ -68,12 +68,12 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080) extends 
   def receiveWithMap(tokens: Map[String, Token]): Receive = {
     case RequestPreviousTokens =>
       sender() ! ResponseWithPreviousTokens(tokens.map {
-        case (sensor, token) => sensor -> (token, None, None)
+        case (sensor, token) => sensor -> (token, None)
       })
     case ReportNewToken(sensor, token) =>
       val updatedTokens = tokens + (sensor -> token)
       saveTokens(updatedTokens.map {
-        case (sensor, token) => (sensor -> (token, None, None))
+        case (sensor, token) => (sensor -> (token, None))
       })
 
       context.become(receiveWithMap(updatedTokens))
@@ -96,7 +96,7 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080) extends 
 
   override def saveTokens(tokensAndStats: TokenAndStatisticsMap): Unit = {
     val tokens = tokensAndStats.map {
-      case (sensor, (token, _, _)) => sensor -> token
+      case (sensor, (token, _)) => sensor -> token
     }
     path.foreach(p => Files.write(p, tokens.mkString("\n").getBytes("UTF-8")))
   }

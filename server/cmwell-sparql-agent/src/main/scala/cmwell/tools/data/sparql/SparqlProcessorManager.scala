@@ -24,14 +24,11 @@ import akka.stream._
 import akka.stream.scaladsl._
 import akka.util.Timeout
 import cmwell.ctrl.checkers.StpChecker.{RequestStats, ResponseStats, Row, Table}
-import cmwell.tools.data.downloader.consumer.Downloader.Token
 import cmwell.tools.data.ingester._
 import cmwell.tools.data.sparql.InfotonReporter.{RequestDownloadStats, RequestIngestStats, ResponseDownloadStats, ResponseIngestStats}
 import cmwell.tools.data.sparql.SparqlProcessorManager._
 import cmwell.tools.data.utils.akka._
-import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
 import cmwell.tools.data.utils.akka.stats.IngesterStats
-import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.chunkers.GroupChunker
 import cmwell.tools.data.utils.chunkers.GroupChunker._
 import cmwell.tools.data.utils.text.Tokens
@@ -45,7 +42,7 @@ import net.jcazevedo.moultingyaml._
 import org.apache.commons.lang3.time.DurationFormatUtils
 import io.circe.Json
 
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.{FiniteDuration, _}
 import scala.util.{Failure, Success, Try}
 import ExecutionContext.Implicits.global
@@ -266,9 +263,9 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
       StpUtil.readPreviousTokens(settings.hostConfigFile, settings.pathAgentConfigs + "/" + path, "ntriples").map { storedTokens =>
 
         val pathsWithoutSavedToken = sensorNames.toSet diff storedTokens.keySet
-        val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("",None,None))
+        val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("",None))
 
-        val body : Iterable[Row] = allSensorsWithTokens.map { case (sensorName, (token,a,b)) =>
+        val body : Iterable[Row] = allSensorsWithTokens.map { case (sensorName, (token,_)) =>
           val decodedToken = if (token.nonEmpty) {
             val from = cmwell.tools.data.utils.text.Tokens.getFromIndexTime(token)
             LocalDateTime.ofInstant(Instant.ofEpochMilli(from), ZoneId.systemDefault()).toString
@@ -304,11 +301,9 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
       } yield {
         val sensorNames = jobConfig.sensors.map(_.name)
         val pathsWithoutSavedToken = sensorNames.toSet diff storedTokens.keySet
-        val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("",None,None))
+        val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("",None))
 
-
-
-        val body : Iterable[Row] = allSensorsWithTokens.map { case (sensorName, (token, _,_)) =>
+        val body : Iterable[Row] = allSensorsWithTokens.map { case (sensorName, (token, _)) =>
           val decodedToken = if (token.nonEmpty) {
             Tokens.getFromIndexTime(token) match{
               case 0 => ""
@@ -373,8 +368,6 @@ class SparqlProcessorManager (settings: SparqlProcessorManagerSettings) extends 
     )
 
     val label = Some(s"ingester-${job.name}")
-
-//    StpUtil.readIngestStatistics(settings.hostConfigFile, settings.pathAgentConfigs + "/" + path, "ntriples" )
 
     val hostUpdatesSource = job.config.hostUpdatesSource.getOrElse(settings.hostUpdatesSource)
 
