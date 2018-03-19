@@ -73,7 +73,6 @@ class IngesterStats(isStderr: Boolean,
       val formatter = java.text.NumberFormat.getNumberInstance
 
       override def preStart(): Unit = {
-
         asyncCB = getAsyncCallback{ _ =>
           displayStats()
           resetStats()
