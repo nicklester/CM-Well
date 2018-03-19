@@ -39,16 +39,14 @@ object IngesterStats {
             initDelay: FiniteDuration = 1.second,
             interval: FiniteDuration = 1.second,
             reporter: Option[ActorRef] = None,
-            label: Option[String] = None,
-            initStats: Option[IngestStats]=None) = new IngesterStats(isStderr, initDelay, interval, reporter, label)
+            label: Option[String] = None) = new IngesterStats(isStderr, initDelay, interval, reporter, label)
 }
 
 class IngesterStats(isStderr: Boolean,
                     initDelay: FiniteDuration = 1.second,
                     interval: FiniteDuration = 1.second,
                     reporter: Option[ActorRef] = None,
-                    label: Option[String] = None,
-                    initStats: Option[IngestStats] = None) extends GraphStage[FlowShape[IngestEvent, IngestEvent]] with DataToolsLogging{
+                    label: Option[String] = None) extends GraphStage[FlowShape[IngestEvent, IngestEvent]] with DataToolsLogging{
   val in = Inlet[IngestEvent]("ingest-stats.in")
   val out = Outlet[IngestEvent]("ingest-stats.out")
   override val shape = FlowShape.of(in, out)
@@ -75,10 +73,6 @@ class IngesterStats(isStderr: Boolean,
       val formatter = java.text.NumberFormat.getNumberInstance
 
       override def preStart(): Unit = {
-
-        initStats.map { stats =>
-          totalIngestedInfotons mark stats.ingestedInfotons
-        }
 
         asyncCB = getAsyncCallback{ _ =>
           displayStats()
