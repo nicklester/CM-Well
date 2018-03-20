@@ -72,8 +72,6 @@ object SparqlTriggeredProcessor {
   }
 }
 
-
-
 class SparqlTriggeredProcessor(config: Config,
                                baseUrl: String,
                                isBulk: Boolean = false,
@@ -85,14 +83,15 @@ class SparqlTriggeredProcessor(config: Config,
 
     def addStatsToSource(id: String, source: Source[(ByteString, Option[SensorContext]), _], initialDownloadStats: Option[TokenAndStatisticsMap] = None) = {
       source.via(DownloaderStats(format = "ntriples", label = Some(id), reporter = tokenReporter, initialDownloadStats = {
-        getSavedSensorTokensAndStatistics.get(id).map { sensor =>
-          sensor._2
+        initialDownloadStats.map { stats =>
+          stats.get(id).map { sensor =>
+            sensor._2
+          }.getOrElse(None)
         }.getOrElse(None)
       }))
-
     }
 
-    def getSavedSensorTokensAndStatistics() : TokenAndStatisticsMap = tokenReporter match {
+    val savedTokensAndStatistics : TokenAndStatisticsMap = tokenReporter match {
       case None => Map.empty[String, TokenAndStatistics]
       case Some(reporter) =>
         import akka.pattern._
@@ -106,7 +105,7 @@ class SparqlTriggeredProcessor(config: Config,
         Await.result(result, 1.minute)
     }
 
-    var savedTokens = getSavedSensorTokensAndStatistics.map {
+    var savedTokens = savedTokensAndStatistics.map {
       case (sensor, (token, _)) => sensor -> token
     }
 
@@ -190,7 +189,7 @@ class SparqlTriggeredProcessor(config: Config,
                 }
 
 
-              addStatsToSource(id = sensor.name, source = tsvSource, initialDownloadStats = Option(getSavedSensorTokensAndStatistics))
+              addStatsToSource(id = sensor.name, source = tsvSource, initialDownloadStats = Option(savedTokensAndStatistics))
 
             }
 

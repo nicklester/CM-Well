@@ -218,7 +218,7 @@ lazy val pluginGremlin = (project in file("cmwell-plugin-gremlin")).enablePlugin
 lazy val spa           = (project in file("cmwell-spa")) .enablePlugins(CMWellBuild)
 lazy val dataTools     = (project in file("cmwell-data-tools")).enablePlugins(CMWellBuild)                          dependsOn(util)
 lazy val dataToolsApp  = (project in file("cmwell-data-tools-app")).enablePlugins(CMWellBuild)                      dependsOn(dataTools)
-lazy val sparqlAgent   = (project in file("cmwell-sparql-agent")).enablePlugins(CMWellBuild)                        dependsOn(dataTools, grid, util, ctrl, zstore)
+lazy val sparqlAgent   = (project in file("cmwell-sparql-agent")).enablePlugins(CMWellBuild)                        dependsOn(dataTools, grid, util, ctrl)
 lazy val tracking      = (project in file("cmwell-tracking")).enablePlugins(CMWellBuild)                            dependsOn(util, zstore, grid, irw, ctrl)
 lazy val ws            = (project in file("cmwell-ws")).enablePlugins(CMWellBuild, PlayScala, SbtTwirl, PlayNettyServer)
                                                        .disablePlugins(PlayAkkaHttpServer)                          dependsOn(domain, common, formats, tlog, fts, irw, rts, ctrl, stortill, zstore, tracking)
