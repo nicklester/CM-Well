@@ -27,7 +27,7 @@ object StpUtil {
             case Left(parseFailure@ParsingFailure(_, _)) => throw parseFailure
             case Right(json) => {
 
-              val token = json.hcursor.downField("fields").downField("token").values.get(0).asString.get
+              val token = json.hcursor.downField("fields").downField("token").values.head.head.asString.get
 
               val receivedInfotons : Option[DownloadStats] = json.hcursor.downField("fields").downField("receivedInfotons").downArray.as[Long].toOption.map{ value =>
                 DownloadStats(receivedInfotons=value)
