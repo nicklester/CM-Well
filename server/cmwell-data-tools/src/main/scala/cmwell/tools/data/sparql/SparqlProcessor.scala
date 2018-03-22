@@ -166,7 +166,9 @@ class SparqlProcessor[T](baseUrl: String,
     type Paths = Seq[ByteString]
     type StartTime = Long
 
-    def validateResponse(body: ByteString, headers: immutable.Seq[HttpHeader]) = {
+    def validateResponse(body: ByteString, headers: Seq[HttpHeader], trailers: Option[Seq[HttpHeader]]) = {
+      val t = trailers.get
+
       !(body containsSlice "Could not process request") && !headers.contains("X-CM-WELL-SG-RS")
     }
 
