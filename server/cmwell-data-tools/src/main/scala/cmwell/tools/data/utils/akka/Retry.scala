@@ -18,7 +18,7 @@ package cmwell.tools.data.utils.akka
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.StatusCodes.{ClientError, ServerError}
-import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
+import akka.http.scaladsl.model.{HttpHeader, HttpRequest, HttpResponse, StatusCodes}
 import akka.pattern._
 import akka.stream._
 import akka.stream.scaladsl._
@@ -58,7 +58,7 @@ object Retry extends DataToolsLogging with DataToolsConfig{
                    baseUrl: String,
                    limit: Option[Int] = None)
                   (createRequest: (Seq[ByteString]) => HttpRequest,
-                   responseBodyValidator: ByteString => Boolean = _ => true)
+                   responseBodyValidator: (ByteString, immutable.Seq[HttpHeader]) => Boolean = (_,_) => true)
                   (implicit system: ActorSystem, mat: Materializer, ec: ExecutionContext, label: Option[LabelId] = None) = {
 
     val labelValue = label.map{case LabelId(id) => s"[$id]"}.getOrElse("")
@@ -186,11 +186,11 @@ object Retry extends DataToolsLogging with DataToolsConfig{
           e.discardBytes()
           Future.successful(Failure(new Exception(s"status is not success ($s) $e")) -> state.copy(response = response.toOption))
 
-        case (response@Success(res@HttpResponse(s, _, e, _)), state) =>
+        case (response@Success(res@HttpResponse(s, headers, e, _)), state) =>
           // consume HTTP response bytes and later pack them in fake response
           val responseAndState = e.withoutSizeLimit().dataBytes.runFold(blank)(_ ++ _)
             .map { dataBytes =>
-              val isValidBody = responseBodyValidator(dataBytes)
+              val isValidBody = responseBodyValidator(dataBytes,headers)
 
               if (isValidBody) {
                 Success(res.copy(entity = dataBytes)) -> state.copy(response = response.toOption)
