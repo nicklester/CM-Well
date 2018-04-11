@@ -155,7 +155,8 @@ class BufferFillerActor(threshold: Int,
 
     case GetData if buf.nonEmpty =>
       sender ! buf.dequeue.map(tokenAndData => {
-        (tokenAndData._1, tokenAndData._2, (buf.isEmpty && consumeComplete))
+        if(isHorizon) logger.info(s"${label.get} reached horizon.")
+        (tokenAndData._1, tokenAndData._2, isHorizon)
       })
 
     // do nothing since there are no elements in buffer
@@ -198,6 +199,8 @@ class BufferFillerActor(threshold: Int,
     case x =>
       logger.error(s"unexpected message: $x")
   }
+
+  def isHorizon : Boolean = (buf.isEmpty && consumeComplete)
 
   /**
     * Sends request of next data chunk and fills the given buffer
