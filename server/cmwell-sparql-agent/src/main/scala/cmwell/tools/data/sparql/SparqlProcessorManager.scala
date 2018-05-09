@@ -23,13 +23,9 @@ import akka.stream._
 import akka.stream.scaladsl._
 import akka.util.Timeout
 import cmwell.ctrl.checkers.StpChecker.{RequestStats, ResponseStats, Row, Table}
+import cmwell.driver.Dao
 import cmwell.tools.data.ingester._
-import cmwell.tools.data.sparql.InfotonReporter.{
-  RequestDownloadStats,
-  RequestIngestStats,
-  ResponseDownloadStats,
-  ResponseIngestStats
-}
+import cmwell.tools.data.sparql.InfotonReporter.{RequestDownloadStats, RequestIngestStats, ResponseDownloadStats, ResponseIngestStats}
 import cmwell.tools.data.sparql.SparqlProcessorManager._
 import cmwell.tools.data.utils.akka._
 import cmwell.tools.data.utils.akka.stats.IngesterStats
@@ -40,6 +36,7 @@ import cmwell.util.http.SimpleResponse
 import cmwell.util.string.Hash
 import cmwell.util.http.SimpleResponse.Implicits.UTF8StringHandler
 import cmwell.util.concurrent._
+import cmwell.zstore.ZStore
 import com.typesafe.scalalogging.LazyLogging
 import k.grid.GridReceives
 import net.jcazevedo.moultingyaml._
@@ -410,10 +407,14 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
 
     val job = jobRead.job
 
+    val stpDao = Dao(settings.irwServiceDaoClusterName, settings.irwServiceDaoKeySpace2, settings.irwServiceDaoHostName)
+    val zStore: ZStore = ZStore.apply(stpDao)
+
+
     //this method MUST BE RUN from the actor's thread and changing the state is allowed. the below will replace any existing state.
     //The state is changed instantly and every change that follows (even from another thread/Future) will be later.
     val tokenReporter = context.actorOf(
-      props = InfotonReporter(baseUrl = settings.hostConfigFile, path = settings.pathAgentConfigs + "/" + job.name),
+      props = InfotonReporter(baseUrl = settings.hostConfigFile, path = settings.pathAgentConfigs + "/" + job.name, zStore = zStore),
       name = s"${job.name}-${Hash.crc32(job.config.toString)}"
     )
 
