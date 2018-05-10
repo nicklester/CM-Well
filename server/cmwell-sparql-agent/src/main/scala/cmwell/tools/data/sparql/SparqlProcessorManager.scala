@@ -110,6 +110,10 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
   implicit val system: ActorSystem = context.system
   implicit val mat = ActorMaterializer()
 
+  val stpDao = Dao(settings.irwServiceDaoClusterName, settings.irwServiceDaoKeySpace2, settings.irwServiceDaoHostName)
+  val zStore: ZStore = ZStore.apply(stpDao)
+
+
   if (mat.isInstanceOf[ActorMaterializer]) {
     require(mat.asInstanceOf[ActorMaterializer].system eq context.system,
             "ActorSystem of materializer MUST be the same as the one used to create current actor")
@@ -296,7 +300,7 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
         )
         val header = Seq("Sensor", "Token Time")
 
-        StpUtil.readPreviousTokens(settings.hostConfigFile, settings.pathAgentConfigs + "/" + path, "ntriples").map {
+        StpUtil.readPreviousTokens(settings.hostConfigFile, settings.pathAgentConfigs + "/" + path, "ntriples", zStore = zStore ).map {
           storedTokens =>
             val pathsWithoutSavedToken = sensorNames.toSet.diff(storedTokens.keySet)
             val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("", None))
@@ -406,10 +410,6 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
   def handleStartJob(jobRead: JobRead): Unit = {
 
     val job = jobRead.job
-
-    val stpDao = Dao(settings.irwServiceDaoClusterName, settings.irwServiceDaoKeySpace2, settings.irwServiceDaoHostName)
-    val zStore: ZStore = ZStore.apply(stpDao)
-
 
     //this method MUST BE RUN from the actor's thread and changing the state is allowed. the below will replace any existing state.
     //The state is changed instantly and every change that follows (even from another thread/Future) will be later.

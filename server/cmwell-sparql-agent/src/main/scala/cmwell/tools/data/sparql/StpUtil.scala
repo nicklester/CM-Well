@@ -14,9 +14,17 @@
   */
 package cmwell.tools.data.sparql
 
+
 import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
-import io.circe._, io.circe.parser._
-import scala.concurrent.ExecutionContext
+import cmwell.zstore.ZStore
+import io.circe._
+import io.circe.parser._
+import cmwell.util.concurrent.{RetryParams, ShouldRetry, retryUntil}
+import cmwell.util.http.SimpleResponse
+
+import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.duration.Duration
+import scala.util.{Success, Try}
 
 object StpUtil {
   def headerString(header: (String, String)): String = header._1 + ":" + header._2
@@ -31,40 +39,46 @@ object StpUtil {
     name.tail
   }
 
-  def readPreviousTokens(baseUrl: String, path: String, format: String)(implicit context: ExecutionContext) = {
 
-    import cmwell.util.http.SimpleResponse.Implicits.UTF8StringHandler
+  def readPreviousTokens(baseUrl: String, path: String, format: String, zStore: ZStore)
+                        (implicit context: ExecutionContext) = {
 
-    cmwell.util.http.SimpleHttpClient
-      .get(s"http://$baseUrl$path/tokens?op=stream&recursive&format=json")
-      .map(response => {
-        response.payload.lines
-          .map({
+
+
+
+    //retryUntil(initialRetryState)(shouldRetry(s"Getting token and statstics state from zCache for agent $path")) {
+
+      zStore.getStringOpt(s"stp-agent-${extractLastPart(path)}", dontRetry = true).map {
+        case None => {
+          // No such key - start STP from scratch
+          Map.newBuilder[String, TokenAndStatistics].result()
+        }
+        case Some(tokenPayload) => {
+          // Key exists and has returned
+          tokenPayload.lines.map({
             row =>
               parse(row) match {
-                case Left(parseFailure @ ParsingFailure(_, _)) => throw parseFailure
+                case Left(parseFailure@ParsingFailure(_, _)) => throw parseFailure
                 case Right(json) => {
 
-                  val token = (for {
-                    vec <- json.hcursor.downField("fields").downField("token").values
-                    jsn <- vec.headOption
-                    str <- jsn.asString
-                  } yield str).getOrElse("")
+                  val token = json.hcursor.downField("token").as[String].getOrElse("")
+                  val sensor = json.hcursor.downField("sensor").as[String].getOrElse("")
+                  val receivedInfotons = json.hcursor.downField("receivedInfotons").downArray.as[Long].toOption.map {
+                    value => DownloadStats(receivedInfotons = value)
+                  }
 
-                  val receivedInfotons: Option[DownloadStats] =
-                    json.hcursor.downField("fields").downField("receivedInfotons").downArray.as[Long].toOption.map {
-                      value =>
-                        DownloadStats(receivedInfotons = value)
-                    }
-
-                  val sensor = extractLastPart(json.hcursor.downField("system").get[String]("path").toOption.get)
                   sensor -> (token, receivedInfotons)
                 }
               }
           })
           .foldLeft(Map.newBuilder[String, TokenAndStatistics])(_.+=(_))
           .result()
-      })
+        }
+      }
+
   }
 
 }
+
+
+

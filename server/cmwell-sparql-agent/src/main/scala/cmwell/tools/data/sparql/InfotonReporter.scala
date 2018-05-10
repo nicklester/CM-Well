@@ -15,15 +15,12 @@
 package cmwell.tools.data.sparql
 
 import akka.actor.{Actor, ActorRef, Props}
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.model._
-import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.{ActorMaterializer, Materializer}
 import akka.pattern._
 import akka.stream.scaladsl.{Sink, Source}
-import cmwell.driver.Dao
 import cmwell.tools.data.downloader.consumer.Downloader.Token
 import cmwell.tools.data.sparql.InfotonReporter._
+import cmwell.tools.data.sparql.StpUtil.extractLastPart
 import cmwell.tools.data.utils.ArgsManipulations
 import cmwell.tools.data.utils.ArgsManipulations.HttpAddress
 import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
@@ -31,6 +28,7 @@ import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.logging.DataToolsLogging
 import cmwell.zstore.ZStore
 import com.typesafe.config.ConfigFactory
+import io.circe.Json
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
@@ -63,7 +61,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
   val name = StpUtil.extractLastPart(path)
 
-  override def preStart(): Unit = StpUtil.readPreviousTokens(baseUrl, path, format).onComplete(self ! _)
+  override def preStart(): Unit = StpUtil.readPreviousTokens(baseUrl, path, format, zStore = zStore).onComplete(self ! _)
 
   override val receive: Receive = receiveBeforeInitializes(Nil) //receiveWithMap(Map.empty)
 
@@ -129,83 +127,40 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       .map(_.payload)
   }
 
-
   def saveTokens(tokenAndStatistics: TokenAndStatisticsMap) : Unit = {
 
-    def createTriples(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
-      val p = if (path.startsWith("/")) path.tail else path
-      s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#token> "$token" .""" + downloadStats.fold("")({ stats =>
-        "\n" + s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#receivedInfotons> "${stats.receivedInfotons}" ."""
-      })
+    def createJson(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
+      Json.fromFields({
+        downloadStats match {
+          case None => List(("sensor", Json.fromString(sensor)), ("token", Json.fromString(token)))
+          case Some(downloadStats) =>
+            List(("sensor", Json.fromString(sensor)), ("token", Json.fromString(token)),
+              ("receivedInfotons", Json.fromLong(downloadStats.receivedInfotons)))
+        }
+      }).noSpaces
     }
 
-    def createZStore2(tokenAndStatistics: TokenAndStatisticsMap)  = {
+    def createTokenPayload(tokenAndStatistics: TokenAndStatisticsMap)  = {
       tokenAndStatistics.foldLeft(Seq.empty[String]) {
-        case (agg, (sensor, (token, downloadStats))) => agg :+ createTriples(sensor, token, downloadStats)
-      }.mkString("\n").getBytes("UTF-8")
+        case (agg, (sensor, (token, downloadStats))) => agg :+ createJson(sensor, token, downloadStats)
+      }.mkString("\n")
     }
 
     Source
       .single(tokenAndStatistics)
-      .map{createZStore2}
+      .map{createTokenPayload}
       .map{
-        zStore.put("key", _ , false)
+        // Think about adding zstore retry code here.
+        zStore.putString(s"stp-agent-${extractLastPart(path)}", _)
       }
-     //.via(Http(context.system).outgoingConnection(host, port))
+      //.via(Http(context.system).outgoingConnection(host, port))
       .map(zStoreFuture => {
         zStoreFuture.onComplete {
-          case Success(_) => logger.error(s"successfully written tokens infoton to $path")
-          case Failure(_) =>   logger.error(s"problem writing tokens infoton to $path")
+          case Success(_) => logger.debug(s"successfully written tokens to zStore, key=$path")
+          case Failure(_) => logger.error(s"problem writing tokens to zStore: ")
         }
       })
       .runWith(Sink.ignore)
-
   }
-
-
-/*
-  override def saveTokens(tokenAndStatistics: TokenAndStatisticsMap): Unit = {
-    def createRequest(tokensStats: TokenAndStatisticsMap) = {
-      val data = HttpEntity(
-        tokensStats
-          .foldLeft(Seq.empty[String]) {
-            case (agg, (sensor, (token, downloadStats))) => agg :+ createTriples(sensor, token, downloadStats)
-          }
-          .mkString("\n")
-      )
-      HttpRequest(uri = s"http://$host:$port/_in?format=$format&replace-mode", method = HttpMethods.POST, entity = data)
-        .addHeader(RawHeader("X-CM-WELL-TOKEN", writeToken))
-    }
-
-
-    def serialize(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
-      val p = if (path.startsWith("/")) path.tail else path
-
-    }
-
-
-
-    def createTriples(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
-      val p = if (path.startsWith("/")) path.tail else path
-      s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#token> "$token" .""" + downloadStats.fold("")({ stats =>
-        "\n" + s"""<cmwell://$p/tokens/$sensor> <cmwell://meta/nn#receivedInfotons> "${stats.receivedInfotons}" ."""
-      })
-    }
-
-    Source
-      .single(tokenAndStatistics)
-      .map(createRequest)
-      .via(Http(context.system).outgoingConnection(host, port))
-      .map {
-        case HttpResponse(s, h, e, _) if s.isSuccess() =>
-          logger.debug(s"successfully written tokens infoton to $path")
-          e.discardBytes()
-        case HttpResponse(s, h, e, _) =>
-          logger.error(s"problem writing tokens infoton to $path")
-          e.discardBytes()
-      }
-      .runWith(Sink.ignore)
-  }
-  */
 
 }
