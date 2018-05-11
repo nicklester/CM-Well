@@ -110,8 +110,8 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
   implicit val system: ActorSystem = context.system
   implicit val mat = ActorMaterializer()
 
-  val stpDao = Dao(settings.irwServiceDaoClusterName, settings.irwServiceDaoKeySpace2, settings.irwServiceDaoHostName)
-  val zStore: ZStore = ZStore.apply(stpDao)
+  lazy val stpDao = Dao(settings.irwServiceDaoClusterName, settings.irwServiceDaoKeySpace2, settings.irwServiceDaoHostName)
+  lazy val zStore: ZStore = ZStore.apply(stpDao)
 
 
   if (mat.isInstanceOf[ActorMaterializer]) {

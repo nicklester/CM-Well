@@ -96,6 +96,8 @@ class SparqlTriggeredProcessor(config: Config,
       )
     }
 
+
+
     val savedTokensAndStatistics: TokenAndStatisticsMap = tokenReporter match {
       case None => Map.empty[String, TokenAndStatistics]
       case Some(reporter) =>
@@ -104,8 +106,8 @@ class SparqlTriggeredProcessor(config: Config,
         val result = (reporter ? RequestPreviousTokens)
           .mapTo[ResponseWithPreviousTokens]
           .map {
+            case FailedToObtainToken                => logger.error(s"did not receive previous tokens: $x"); Map.empty[String, TokenAndStatistics]
             case ResponseWithPreviousTokens(tokens) => tokens
-            case x                                  => logger.error(s"did not receive previous tokens: $x"); Map.empty[String, TokenAndStatistics]
           }
 
         Await.result(result, 1.minute)

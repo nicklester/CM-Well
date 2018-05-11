@@ -16,17 +16,18 @@ package cmwell.tools.data.sparql
 
 
 import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
+import cmwell.tools.data.utils.logging.DataToolsLogging
 import cmwell.zstore.ZStore
 import io.circe._
 import io.circe.parser._
-import cmwell.util.concurrent.{RetryParams, ShouldRetry, retryUntil}
-import cmwell.util.http.SimpleResponse
+import cmwell.util.concurrent.{DoNotRetry, RetryParams, RetryWith, ShouldRetry, retryUntil}
 
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.Duration
-import scala.util.{Success, Try}
+import scala.util.{Failure, Success, Try}
 
-object StpUtil {
+object StpUtil extends DataToolsLogging {
   def headerString(header: (String, String)): String = header._1 + ":" + header._2
 
   def headersString(headers: Seq[(String, String)]): String = headers.map(headerString).mkString("[", ",", "]")
@@ -39,14 +40,38 @@ object StpUtil {
     name.tail
   }
 
+  def readPreviousTokensWithRetry(baseUrl: String, path: String, format: String, zStore: ZStore)
+                                 (implicit context: ExecutionContext) = {
+
+    def shouldRetry(action: String): (Try[TokenAndStatisticsMap], RetryParams) => ShouldRetry[RetryParams] = {
+      import scala.language.implicitConversions
+      implicit def asFiniteDuration(d: Duration) = scala.concurrent.duration.Duration.fromNanos(d.toNanos);
+      {
+        case (Success(d),_) =>
+          logger.debug(s"Successfully read token and statistics state from zStore for agent ${extractLastPart(path)}")
+          DoNotRetry
+        case (Failure(ex), state) if state.retriesLeft == 0 => {
+          logger.error(s"Failed to read token and statistics state from zStore. 0 retries left. Will not re-attempt for agent ${extractLastPart(path)}")
+          DoNotRetry
+        }
+        case (Failure(ex), state @ RetryParams(retriesLeft, delay, delayFactor)) => {
+          logger.warn(s"Failed to read token and statistics state from zStore. " +
+            s"$retriesLeft retries left for agent ${extractLastPart(path)}")
+          val newDelay = delay * delayFactor
+          RetryWith(state.copy(delay = newDelay, retriesLeft = retriesLeft - 1))
+        }
+
+      }
+    }
+
+    retryUntil(RetryParams(3, 2.seconds, 1))(shouldRetry(s"Getting token and statistics state from zStore for agent ${extractLastPart(path)}")) {
+      readPreviousTokens(baseUrl,path,format,zStore)
+    }
+
+  }
 
   def readPreviousTokens(baseUrl: String, path: String, format: String, zStore: ZStore)
                         (implicit context: ExecutionContext) = {
-
-
-
-
-    //retryUntil(initialRetryState)(shouldRetry(s"Getting token and statstics state from zCache for agent $path")) {
 
       zStore.getStringOpt(s"stp-agent-${extractLastPart(path)}", dontRetry = true).map {
         case None => {
@@ -60,10 +85,10 @@ object StpUtil {
               parse(row) match {
                 case Left(parseFailure@ParsingFailure(_, _)) => throw parseFailure
                 case Right(json) => {
-
+                  throw new Exception
                   val token = json.hcursor.downField("token").as[String].getOrElse("")
                   val sensor = json.hcursor.downField("sensor").as[String].getOrElse("")
-                  val receivedInfotons = json.hcursor.downField("receivedInfotons").downArray.as[Long].toOption.map {
+                  val receivedInfotons = json.hcursor.downField("receivedInfotons").as[Long].toOption.map {
                     value => DownloadStats(receivedInfotons = value)
                   }
 

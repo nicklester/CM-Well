@@ -188,3 +188,4 @@ case class ResponseWithPreviousTokens(tokens: TokenAndStatisticsMap)
 case class ReportNewToken(sensor: String, token: Token)
 case class RequestReference(path: String)
 case class ResponseReference(data: String)
+
