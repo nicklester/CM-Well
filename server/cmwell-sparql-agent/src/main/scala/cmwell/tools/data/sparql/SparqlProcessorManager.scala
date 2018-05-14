@@ -300,21 +300,27 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
         )
         val header = Seq("Sensor", "Token Time")
 
-        StpUtil.readPreviousTokens(settings.hostConfigFile, settings.pathAgentConfigs + "/" + path, "ntriples", zStore = zStore ).map {
-          storedTokens =>
-            val pathsWithoutSavedToken = sensorNames.toSet.diff(storedTokens.keySet)
-            val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("", None))
 
-            val body: Iterable[Row] = allSensorsWithTokens.map {
-              case (sensorName, (token, _)) =>
-                val decodedToken = if (token.nonEmpty) {
-                  val from = cmwell.tools.data.utils.text.Tokens.getFromIndexTime(token)
-                  LocalDateTime.ofInstant(Instant.ofEpochMilli(from), ZoneId.systemDefault()).toString
-                } else ""
+        StpUtil.readPreviousTokens(settings.hostConfigFile, settings.pathAgentConfigs + "/" + path, "ntriples", zStore).map {
+          result =>
+            result match {
+              case storedTokens =>
+                val pathsWithoutSavedToken = sensorNames.toSet.diff(storedTokens.keySet)
+                val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("", None))
 
-                Seq(sensorName, decodedToken)
+                val body: Iterable[Row] = allSensorsWithTokens.map {
+                  case (sensorName, (token, _)) =>
+                    val decodedToken = if (token.nonEmpty) {
+                      val from = cmwell.tools.data.utils.text.Tokens.getFromIndexTime(token)
+                      LocalDateTime.ofInstant(Instant.ofEpochMilli(from), ZoneId.systemDefault()).toString
+                    } else ""
+
+                    Seq(sensorName, decodedToken)
+                }
+                Table(title = title, header = header, body = body)
             }
-            Table(title = title, header = header, body = body)
+        }.recover {
+          case _ => Table(title = title, header = header, body = Seq(Seq("")))
         }
     }
 
@@ -339,61 +345,69 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
           statsIngestRD <- stats2Future
           statsIngest = statsIngestRD.stats
           storedTokensRWPT <- storedTokensFuture
-          storedTokens = storedTokensRWPT.tokens
+          //storedTokens <- storedTokensRWPT.tokens.left
+         // storedTokens = storedTokensRWPT.tokens
         } yield {
-          val sensorNames = jobConfig.sensors.map(_.name)
-          val pathsWithoutSavedToken = sensorNames.toSet.diff(storedTokens.keySet)
-          val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("", None))
+          storedTokensRWPT.tokens match {
+            case Right(storedTokens) => {
 
-          val body: Iterable[Row] = allSensorsWithTokens.map {
-            case (sensorName, (token, _)) =>
-              val decodedToken = if (token.nonEmpty) {
-                Tokens.getFromIndexTime(token) match {
-                  case 0 => ""
-                  case tokenTime =>
-                    (LocalDateTime.ofInstant(Instant.ofEpochMilli(tokenTime), ZoneId.systemDefault()).toString)
-                }
-              } else ""
+              val sensorNames = jobConfig.sensors.map(_.name)
+              val pathsWithoutSavedToken = sensorNames.toSet.diff(storedTokens.keySet)
+              val allSensorsWithTokens = storedTokens ++ pathsWithoutSavedToken.map(_ -> ("", None))
 
-              val sensorStats = stats
-                .get(sensorName)
+              val body: Iterable[Row] = allSensorsWithTokens.map {
+                case (sensorName, (token, _)) =>
+                  val decodedToken = if (token.nonEmpty) {
+                    Tokens.getFromIndexTime(token) match {
+                      case 0 => ""
+                      case tokenTime =>
+                        (LocalDateTime.ofInstant(Instant.ofEpochMilli(tokenTime), ZoneId.systemDefault()).toString)
+                    }
+                  } else ""
+
+                  val sensorStats = stats
+                    .get(sensorName)
+                    .map { s =>
+                      val statsTime = s.statsTime match {
+                        case 0 => "Not Yet Updated"
+                        case _ =>
+                          LocalDateTime.ofInstant(Instant.ofEpochMilli(s.statsTime), ZoneId.systemDefault()).toString
+                      }
+
+                      val infotonRate = s.horizon match {
+                        case true => s"""<span style="color:green">Horizon</span>"""
+                        case false => s"${formatter.format(s.infotonRate)}/sec"
+                      }
+
+                      Seq(s.receivedInfotons.toString, infotonRate, statsTime)
+
+                    }
+                    .getOrElse(Seq.empty[String])
+
+                  Seq(sensorName, decodedToken) ++ sensorStats
+              }
+              val configName = Paths.get(path).getFileName
+
+              val sparqlIngestStats = statsIngest
+                .get(s"ingester-$configName")
                 .map { s =>
-                  val statsTime = s.statsTime match {
-                    case 0 => "Not Yet Updated"
-                    case _ =>
-                      LocalDateTime.ofInstant(Instant.ofEpochMilli(s.statsTime), ZoneId.systemDefault()).toString
-                  }
-
-                  val infotonRate = s.horizon match {
-                    case true  => s"""<span style="color:green">Horizon</span>"""
-                    case false => s"${formatter.format(s.infotonRate)}/sec"
-                  }
-
-                  Seq(s.receivedInfotons.toString, infotonRate, statsTime)
-
+                  s"""Ingested <span style="color:green"> **${s.ingestedInfotons}** </span> Failed <span style="color:red"> **${s.failedInfotons}** </span>"""
                 }
-                .getOrElse(Seq.empty[String])
+                .getOrElse("")
 
-              Seq(sensorName, decodedToken) ++ sensorStats
+              val sparqlMaterializerStats = stats
+                .get(s"$configName-${SparqlTriggeredProcessor.sparqlMaterializerLabel}")
+                .map { s =>
+                  val totalRunTime = DurationFormatUtils.formatDurationWords(s.runningTime, true, true)
+                  s"""Materialized <span style="color:green"> **${s.receivedInfotons}** </span> infotons [$totalRunTime]""".stripMargin
+                }
+                .getOrElse("")
+
+              Table(title = title :+ sparqlMaterializerStats :+ sparqlIngestStats, header = header, body = body)
+
+            }
+            case _ => Table(title = title, header = header, body = Seq(Seq("")))
           }
-          val configName = Paths.get(path).getFileName
-
-          val sparqlIngestStats = statsIngest
-            .get(s"ingester-$configName")
-            .map { s =>
-              s"""Ingested <span style="color:green"> **${s.ingestedInfotons}** </span> Failed <span style="color:red"> **${s.failedInfotons}** </span>"""
-            }
-            .getOrElse("")
-
-          val sparqlMaterializerStats = stats
-            .get(s"$configName-${SparqlTriggeredProcessor.sparqlMaterializerLabel}")
-            .map { s =>
-              val totalRunTime = DurationFormatUtils.formatDurationWords(s.runningTime, true, true)
-              s"""Materialized <span style="color:green"> **${s.receivedInfotons}** </span> infotons [$totalRunTime]""".stripMargin
-            }
-            .getOrElse("")
-
-          Table(title = title :+ sparqlMaterializerStats :+ sparqlIngestStats, header = header, body = body)
         }
     }
 
@@ -423,7 +437,7 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
     val hostUpdatesSource = job.config.hostUpdatesSource.getOrElse(settings.hostUpdatesSource)
 
     val agent = SparqlTriggeredProcessor
-      .listen(job.config, hostUpdatesSource, false, Some(tokenReporter), Some(job.name))
+      .listen(job.config, hostUpdatesSource, false, Some(tokenReporter), Some(job.name), infotonGroupSize = settings.infotonGroupSize)
       .map { case (data, _) => data }
       .via(GroupChunker(formatToGroupExtractor(settings.materializedViewFormat)))
       .map(concatByteStrings(_, endl))

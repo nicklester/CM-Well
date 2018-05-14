@@ -45,6 +45,8 @@ class SparqlProcessorManagerSettings {
   val irwServiceDaoClusterName = stpSettings.getString("irwServiceDao.clusterName")
   val irwServiceDaoKeySpace2 = stpSettings.getString("irwServiceDao.keySpace2")
 
+  val infotonGroupSize: Integer = stpSettings.getInt("cmwell.triggeredProcessor.infoton-group-size")
+
   //val httpPool: Flow[(HttpRequest, ByteString), (Try[HttpResponse], ByteString), Http.HostConnectionPool] = {
   //val HttpAddress(_, host, port, _) = ArgsManipulations.extractBaseUrl(hostConfigFile)
   //Http().cachedHostConnectionPool[ByteString](host, port)

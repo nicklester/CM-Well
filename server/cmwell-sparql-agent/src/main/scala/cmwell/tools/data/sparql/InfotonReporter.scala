@@ -61,7 +61,10 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
   val name = StpUtil.extractLastPart(path)
 
-  override def preStart(): Unit = StpUtil.readPreviousTokensWithRetry(baseUrl, path, format, zStore = zStore).onComplete(self ! _)
+  override def preStart(): Unit = StpUtil.readPreviousTokensWithRetry(baseUrl, path, format, zStore = zStore).onComplete({
+    case Success(tokensAndStats) => self ! Right(tokensAndStats)
+    case Failure(err) => self ! Left(err)
+  })
 
   override val receive: Receive = receiveBeforeInitializes(Nil) //receiveWithMap(Map.empty)
 
@@ -69,9 +72,13 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     case RequestPreviousTokens =>
       context.become(receiveBeforeInitializes(sender() :: recipients))
 
-    case Success(savedTokens: TokenAndStatisticsMap) =>
-      recipients.foreach(_ ! ResponseWithPreviousTokens(savedTokens))
-      context.become(receiveWithMap(savedTokens))
+    case Success(savedTokens: Either[String,TokenAndStatisticsMap]) =>
+      savedTokens match {
+        case Right(tokens) =>
+          recipients.foreach(_ ! ResponseWithPreviousTokens(savedTokens))
+          context.become(receiveWithMap(tokens))
+        case Left(_) => recipients.foreach(_ ! ResponseWithPreviousTokens(savedTokens))
+      }
 
     case s: DownloadStats =>
       downloadStats += (s.label.getOrElse("") -> s)
@@ -88,7 +95,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     case Failure(ex) =>
       logger.error("cannot read previous tokens infoton")
       context.become(receiveWithMap(Map.empty))
-      sender() ! FailedToObtainToken
+      //TODO sender() ! FailedToObtainToken
 
     case RequestReference(path) =>
       val data = getReferencedData(path)
@@ -97,7 +104,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
   def receiveWithMap(tokensAndStats: TokenAndStatisticsMap): Receive = {
     case RequestPreviousTokens =>
-      sender() ! ResponseWithPreviousTokens(tokensAndStats)
+      sender() ! ResponseWithPreviousTokens(Right(tokensAndStats))
 
     case ReportNewToken(sensor, token) =>
       val updatedTokens = tokensAndStats + (sensor -> (token, downloadStats.get(sensor)))
