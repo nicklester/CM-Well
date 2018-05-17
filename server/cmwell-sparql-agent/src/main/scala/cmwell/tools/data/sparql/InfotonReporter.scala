@@ -61,7 +61,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
   val name = StpUtil.extractLastPart(path)
 
-  override def preStart(): Unit = StpUtil.readPreviousTokensWithRetry(baseUrl, path, format, zStore = zStore).onComplete(self ! _)
+  override def preStart(): Unit = StpUtil.readPreviousTokensWithRetry(baseUrl, path, format, zStore = zStore).onComplete( self ! _ )
 
   override val receive: Receive = receiveBeforeInitializes(Nil) //receiveWithMap(Map.empty)
 
@@ -70,8 +70,13 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       context.become(receiveBeforeInitializes(sender() :: recipients))
 
     case Success(savedTokens: TokenAndStatisticsMap) =>
-      recipients.foreach(_ ! ResponseWithPreviousTokens(savedTokens))
       context.become(receiveWithMap(savedTokens))
+      recipients.foreach(_ ! ResponseWithPreviousTokens(Right(savedTokens)))
+
+    case Failure(ex) =>
+      logger.error("cannot read previous tokens infoton")
+      context.become(receiveWithMap(Map.empty))
+      recipients.foreach(_ ! ResponseWithPreviousTokens(Left(ex.getMessage)))
 
     case s: DownloadStats =>
       downloadStats += (s.label.getOrElse("") -> s)
@@ -85,11 +90,6 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     case RequestIngestStats =>
       sender() ! ResponseIngestStats(ingestStats)
 
-    case Failure(ex) =>
-      logger.error("cannot read previous tokens infoton")
-      context.become(receiveWithMap(Map.empty))
-      sender() ! FailedToObtainToken
-
     case RequestReference(path) =>
       val data = getReferencedData(path)
       data.map(ResponseReference.apply).pipeTo(sender())
@@ -97,7 +97,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
   def receiveWithMap(tokensAndStats: TokenAndStatisticsMap): Receive = {
     case RequestPreviousTokens =>
-      sender() ! ResponseWithPreviousTokens(tokensAndStats)
+      sender() ! ResponseWithPreviousTokens(Right(tokensAndStats))
 
     case ReportNewToken(sensor, token) =>
       val updatedTokens = tokensAndStats + (sensor -> (token, downloadStats.get(sensor)))
@@ -151,14 +151,12 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       .single(tokenAndStatistics)
       .map{createTokenPayload}
       .map{
-        // Think about adding zstore retry code here.
         zStore.putString(s"stp-agent-${extractLastPart(path)}", _)
       }
-      //.via(Http(context.system).outgoingConnection(host, port))
       .map(zStoreFuture => {
         zStoreFuture.onComplete {
           case Success(_) => logger.debug(s"successfully written tokens to zStore, key=$path")
-          case Failure(_) => logger.error(s"problem writing tokens to zStore: ")
+          case Failure(ex) => logger.error(s"problem writing tokens to zStore: ${ex.getMessage}")
         }
       })
       .runWith(Sink.ignore)

@@ -47,14 +47,16 @@ object StpUtil extends DataToolsLogging {
       import scala.language.implicitConversions
       implicit def asFiniteDuration(d: Duration) = scala.concurrent.duration.Duration.fromNanos(d.toNanos);
       {
-        case (Success(d),_) =>
+        case (Success(_),_) =>
           logger.debug(s"Successfully read token and statistics state from zStore for agent ${extractLastPart(path)}")
           DoNotRetry
         case (Failure(ex), state) if state.retriesLeft == 0 => {
+          logger.error(ex.getMessage)
           logger.error(s"Failed to read token and statistics state from zStore. 0 retries left. Will not re-attempt for agent ${extractLastPart(path)}")
           DoNotRetry
         }
         case (Failure(ex), state @ RetryParams(retriesLeft, delay, delayFactor)) => {
+          logger.error(ex.getMessage)
           logger.warn(s"Failed to read token and statistics state from zStore. " +
             s"$retriesLeft retries left for agent ${extractLastPart(path)}")
           val newDelay = delay * delayFactor
@@ -64,14 +66,14 @@ object StpUtil extends DataToolsLogging {
       }
     }
 
-    retryUntil(RetryParams(3, 2.seconds, 1))(shouldRetry(s"Getting token and statistics state from zStore for agent ${extractLastPart(path)}")) {
+    retryUntil(RetryParams(3, 5.seconds, 1))(shouldRetry(s"Getting token and statistics state from zStore for agent ${extractLastPart(path)}")) {
       readPreviousTokens(baseUrl,path,format,zStore)
     }
 
   }
 
   def readPreviousTokens(baseUrl: String, path: String, format: String, zStore: ZStore)
-                        (implicit context: ExecutionContext) = {
+                        (implicit context: ExecutionContext)  = {
 
       zStore.getStringOpt(s"stp-agent-${extractLastPart(path)}", dontRetry = true).map {
         case None => {
@@ -85,7 +87,6 @@ object StpUtil extends DataToolsLogging {
               parse(row) match {
                 case Left(parseFailure@ParsingFailure(_, _)) => throw parseFailure
                 case Right(json) => {
-                  throw new Exception
                   val token = json.hcursor.downField("token").as[String].getOrElse("")
                   val sensor = json.hcursor.downField("sensor").as[String].getOrElse("")
                   val receivedInfotons = json.hcursor.downField("receivedInfotons").as[Long].toOption.map {
@@ -100,7 +101,6 @@ object StpUtil extends DataToolsLogging {
           .result()
         }
       }
-
   }
 
 }
