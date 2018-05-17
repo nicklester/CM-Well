@@ -61,10 +61,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
   val name = StpUtil.extractLastPart(path)
 
-  override def preStart(): Unit = StpUtil.readPreviousTokensWithRetry(baseUrl, path, format, zStore = zStore).onComplete({
-    case Success(tokensAndStats) => self ! Right(tokensAndStats)
-    case Failure(err) => self ! Left(err)
-  })
+  override def preStart(): Unit = StpUtil.readPreviousTokensWithRetry(baseUrl, path, format, zStore = zStore).onComplete( self ! _ )
 
   override val receive: Receive = receiveBeforeInitializes(Nil) //receiveWithMap(Map.empty)
 
@@ -72,13 +69,9 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     case RequestPreviousTokens =>
       context.become(receiveBeforeInitializes(sender() :: recipients))
 
-    case Success(savedTokens: Either[String,TokenAndStatisticsMap]) =>
-      savedTokens match {
-        case Right(tokens) =>
-          recipients.foreach(_ ! ResponseWithPreviousTokens(savedTokens))
-          context.become(receiveWithMap(tokens))
-        case Left(_) => recipients.foreach(_ ! ResponseWithPreviousTokens(savedTokens))
-      }
+    case Success(savedTokens: TokenAndStatisticsMap) =>
+      context.become(receiveWithMap(savedTokens))
+      recipients.foreach(_ ! ResponseWithPreviousTokens(Right(savedTokens)))
 
     case s: DownloadStats =>
       downloadStats += (s.label.getOrElse("") -> s)
@@ -95,7 +88,10 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     case Failure(ex) =>
       logger.error("cannot read previous tokens infoton")
       context.become(receiveWithMap(Map.empty))
-      //TODO sender() ! FailedToObtainToken
+   //   sender() ! ResponseWithPreviousTokens(Left(ex.getMessage))
+      recipients.foreach(_ ! ResponseWithPreviousTokens(Left(ex.getMessage)))
+
+
 
     case RequestReference(path) =>
       val data = getReferencedData(path)

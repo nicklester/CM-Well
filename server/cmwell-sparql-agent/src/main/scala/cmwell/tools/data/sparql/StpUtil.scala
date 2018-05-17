@@ -47,14 +47,16 @@ object StpUtil extends DataToolsLogging {
       import scala.language.implicitConversions
       implicit def asFiniteDuration(d: Duration) = scala.concurrent.duration.Duration.fromNanos(d.toNanos);
       {
-        case (Success(d),_) =>
+        case (Success(_),_) =>
           logger.debug(s"Successfully read token and statistics state from zStore for agent ${extractLastPart(path)}")
           DoNotRetry
         case (Failure(ex), state) if state.retriesLeft == 0 => {
+          logger.error(ex.getMessage)
           logger.error(s"Failed to read token and statistics state from zStore. 0 retries left. Will not re-attempt for agent ${extractLastPart(path)}")
           DoNotRetry
         }
         case (Failure(ex), state @ RetryParams(retriesLeft, delay, delayFactor)) => {
+          logger.error(ex.getMessage)
           logger.warn(s"Failed to read token and statistics state from zStore. " +
             s"$retriesLeft retries left for agent ${extractLastPart(path)}")
           val newDelay = delay * delayFactor
@@ -64,7 +66,7 @@ object StpUtil extends DataToolsLogging {
       }
     }
 
-    retryUntil(RetryParams(3, 2.seconds, 1))(shouldRetry(s"Getting token and statistics state from zStore for agent ${extractLastPart(path)}")) {
+    retryUntil(RetryParams(3, 5.seconds, 1))(shouldRetry(s"Getting token and statistics state from zStore for agent ${extractLastPart(path)}")) {
       readPreviousTokens(baseUrl,path,format,zStore)
     }
 
@@ -85,7 +87,7 @@ object StpUtil extends DataToolsLogging {
               parse(row) match {
                 case Left(parseFailure@ParsingFailure(_, _)) => throw parseFailure
                 case Right(json) => {
-                  throw new Exception
+                  throw new Exception("ouch")
                   val token = json.hcursor.downField("token").as[String].getOrElse("")
                   val sensor = json.hcursor.downField("sensor").as[String].getOrElse("")
                   val receivedInfotons = json.hcursor.downField("receivedInfotons").as[Long].toOption.map {
@@ -100,44 +102,7 @@ object StpUtil extends DataToolsLogging {
           .result()
         }
       }
-/*
-=======
-    cmwell.util.http.SimpleHttpClient
-      .get(s"http://$baseUrl$path/tokens?op=stream&recursive&format=json")
-      .map{
-        case response if response.status == 200 || response.status == 404 =>
-          Right(response.payload.lines
-            .map({
-              row =>
-                parse(row) match {
-                  case Left(parseFailure @ ParsingFailure(_, _)) => throw parseFailure
-                  case Right(json) => {
-
-                    val token = (for {
-                      vec <- json.hcursor.downField("fields").downField("token").values
-                      jsn <- vec.headOption
-                      str <- jsn.asString
-                    } yield str).getOrElse("")
-
-                    val receivedInfotons: Option[DownloadStats] =
-                      json.hcursor.downField("fields").downField("receivedInfotons").downArray.as[Long].toOption.map {
-                        value =>
-                          DownloadStats(receivedInfotons = value)
-                      }
-
-                    val sensor = extractLastPart(json.hcursor.downField("system").get[String]("path").toOption.get)
-                    sensor -> (token, receivedInfotons)
-                  }
-                }
-            })
-            .foldLeft(Map.newBuilder[String, TokenAndStatistics])(_.+=(_))
-            .result())
-        case _ => Left(s"Could not read token infoton from cm-well for agent: ${path}")
-      }
->>>>>>> upstream/master
-*/
   }
-
 
 }
 
