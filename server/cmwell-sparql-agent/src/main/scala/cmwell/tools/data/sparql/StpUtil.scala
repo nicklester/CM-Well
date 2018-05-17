@@ -87,7 +87,6 @@ object StpUtil extends DataToolsLogging {
               parse(row) match {
                 case Left(parseFailure@ParsingFailure(_, _)) => throw parseFailure
                 case Right(json) => {
-                  throw new Exception("ouch")
                   val token = json.hcursor.downField("token").as[String].getOrElse("")
                   val sensor = json.hcursor.downField("sensor").as[String].getOrElse("")
                   val receivedInfotons = json.hcursor.downField("receivedInfotons").as[Long].toOption.map {
