@@ -16,6 +16,7 @@ package cmwell.tools.data.sparql
 
 
 import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
+import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.logging.DataToolsLogging
 import cmwell.zstore.ZStore
 import io.circe._
@@ -72,6 +73,10 @@ object StpUtil extends DataToolsLogging {
 
   }
 
+
+  case class AgentTokensAndStatisticsCase(sensors: TokenAndStatisticsMap, agent: Option[IngestStats])
+
+
   def readPreviousTokens(baseUrl: String, path: String, zStore: ZStore)
                         (implicit context: ExecutionContext)  = {
 
@@ -82,11 +87,39 @@ object StpUtil extends DataToolsLogging {
       }
       case Some(tokenPayload) => {
         // Key exists and has returned
+        val allJson = tokenPayload.lines.map{
+          row =>
+            parse(row) match {
+              case Left(parseFailure@ParsingFailure(_, _)) => throw parseFailure
+              case Right(json) => json
+            }
+        }.toList
+
+        val ingestStats = allJson.find{  _.hcursor.downField("ingestedInfotons").succeeded }.map { json=>
+          val ingestedInfotons = json.hcursor.downField("ingestedInfotons").as[Long].toOption
+          val failedInfotons = json.hcursor.downField("failedInfotons").as[Long].toOption
+          IngestStats(None,0,ingestedInfotons.get,failedInfotons.get)
+        }
+
+        val sensors = allJson.map { json=>
+          val token = json.hcursor.downField("token").as[String].getOrElse("")
+          val sensor = json.hcursor.downField("sensor").as[String].getOrElse("")
+          val receivedInfotons = json.hcursor.downField("receivedInfotons").as[Long].toOption.map {
+            value => DownloadStats(receivedInfotons = value)
+          }
+          sensor -> (token, receivedInfotons)
+        }.foldLeft(Map.newBuilder[String, TokenAndStatistics])(_.+=(_))
+        .result
+
+        sensors
+        /*
+
         tokenPayload.lines.map({
           row =>
             parse(row) match {
               case Left(parseFailure@ParsingFailure(_, _)) => throw parseFailure
               case Right(json) => {
+
                 val token = json.hcursor.downField("token").as[String].getOrElse("")
                 val sensor = json.hcursor.downField("sensor").as[String].getOrElse("")
                 val receivedInfotons = json.hcursor.downField("receivedInfotons").as[Long].toOption.map {
@@ -99,6 +132,7 @@ object StpUtil extends DataToolsLogging {
         })
         .foldLeft(Map.newBuilder[String, TokenAndStatistics])(_.+=(_))
         .result()
+        */
       }
     }
   }

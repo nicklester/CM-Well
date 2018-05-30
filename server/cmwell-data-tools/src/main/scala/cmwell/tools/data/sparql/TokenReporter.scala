@@ -24,6 +24,7 @@ import akka.pattern._
 import akka.stream.scaladsl._
 import akka.stream.{ActorMaterializer, Materializer}
 import cmwell.tools.data.downloader.consumer.Downloader.Token
+import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.logging.DataToolsLogging
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -44,7 +45,7 @@ trait SparqlTriggerProcessorReporter {
     * Store given tokens for a future usage (e.g., in a non-volatile memory)
     * @param tokensAndStats tokens with current statistics to be saved
     */
-  def saveTokens(tokensAndStats: TokenAndStatisticsMap): Unit
+  def saveTokens(tokensAndStats: (TokenAndStatisticsMap, Option[IngestStats])): Unit
 }
 
 /**
@@ -72,7 +73,7 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080)
       val updatedTokens = tokens + (sensor -> token)
       saveTokens(updatedTokens.map {
         case (sensor, token) => (sensor -> (token, None))
-      })
+      }, None)
 
       context.become(receiveWithMap(updatedTokens))
     case RequestReference(path) =>
@@ -98,8 +99,8 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080)
   override def getReferencedData(path: String): Future[String] =
     Future.successful(scala.io.Source.fromFile(path).mkString)
 
-  override def saveTokens(tokensAndStats: TokenAndStatisticsMap): Unit = {
-    val tokens = tokensAndStats.map {
+  override def saveTokens(tokensAndStats: (TokenAndStatisticsMap, Option[IngestStats])): Unit = {
+    val tokens = tokensAndStats._1.map {
       case (sensor, (token, _)) => sensor -> token
     }
     path.foreach(p => Files.write(p, tokens.mkString("\n").getBytes("UTF-8")))

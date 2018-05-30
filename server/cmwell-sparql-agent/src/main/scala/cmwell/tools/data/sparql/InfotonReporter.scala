@@ -30,6 +30,8 @@ import cmwell.zstore.ZStore
 import com.typesafe.config.ConfigFactory
 import io.circe.Json
 
+import io.circe.syntax._
+
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
@@ -39,7 +41,7 @@ object InfotonReporter {
   case object RequestIngestStats
 
   case class ResponseDownloadStats(stats: Map[String, DownloadStats])
-  case class ResponseIngestStats(stats: Map[String, IngestStats])
+  case class ResponseIngestStats(stats: Option[IngestStats])
 
   def apply(baseUrl: String, path: String, zStore: ZStore)(implicit mat: Materializer, ec: ExecutionContext) =
     Props(new InfotonReporter(baseUrl, path, zStore))
@@ -57,7 +59,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
   val format = "ntriples"
   val writeToken = ConfigFactory.load().getString("cmwell.agents.sparql-triggered-processor.write-token")
   var downloadStats: Map[String, DownloadStats] = Map()
-  var ingestStats: Map[String, IngestStats] = Map()
+  var ingestStats: Option[IngestStats] = Some(IngestStats(None,0,0,0))
 
   val name = StpUtil.extractLastPart(path)
 
@@ -81,8 +83,8 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     case s: DownloadStats =>
       downloadStats += (s.label.getOrElse("") -> s)
 
-    case ingest: IngestStats =>
-      ingestStats += (ingest.label.getOrElse("") -> ingest)
+    case s: IngestStats =>
+      ingestStats = Some(s)
 
     case RequestDownloadStats =>
       sender() ! ResponseDownloadStats(downloadStats)
@@ -101,14 +103,13 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
     case ReportNewToken(sensor, token) =>
       val updatedTokens = tokensAndStats + (sensor -> (token, downloadStats.get(sensor)))
-      saveTokens(updatedTokens)
+      saveTokens((updatedTokens, ingestStats))
       context.become(receiveWithMap(updatedTokens))
 
     case s: DownloadStats =>
       downloadStats += (s.label.getOrElse("") -> s)
 
-    case s: IngestStats =>
-      ingestStats += (s.label.getOrElse("") -> s)
+    case s: IngestStats => ingestStats = Some(s)
 
     case RequestDownloadStats =>
       sender() ! ResponseDownloadStats(downloadStats)
@@ -128,28 +129,43 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       .map(_.payload)
   }
 
-  def saveTokens(tokenAndStatistics: TokenAndStatisticsMap) : Unit = {
+  def saveTokens(tokenAndStatistics: AgentTokensAndStatistics) : Unit = {
 
-    def createJson(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
+    def createSensorJson(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
       Json.fromFields({
-        downloadStats match {
+        (downloadStats match {
           case None => List(("sensor", Json.fromString(sensor)), ("token", Json.fromString(token)))
           case Some(downloadStats) =>
             List(("sensor", Json.fromString(sensor)), ("token", Json.fromString(token)),
               ("receivedInfotons", Json.fromLong(downloadStats.receivedInfotons)))
-        }
+        })
       }).noSpaces
     }
 
-    def createTokenPayload(tokenAndStatistics: TokenAndStatisticsMap)  = {
-      tokenAndStatistics.foldLeft(Seq.empty[String]) {
-        case (agg, (sensor, (token, downloadStats))) => agg :+ createJson(sensor, token, downloadStats)
-      }.mkString("\n")
+    def createAgentJson(ingestStats: Option[IngestStats]) = {
+      Seq(Json.fromFields( {
+        (ingestStats match {
+          case Some(ingestStats) => {
+            List(("ingestedInfotons", Json.fromLong(ingestStats.ingestedInfotons)),
+              ("failedInfotons", Json.fromLong(ingestStats.failedInfotons)))
+          }
+          case None => Nil
+        })
+      }).noSpaces)
     }
+
+    def createPayload(tokenAndStatistics: AgentTokensAndStatistics)  = {
+     val d=  tokenAndStatistics._1.foldLeft(Seq.empty[String]) {
+        case (agg, (sensor, (token, downloadStats))) => agg :+ createSensorJson(sensor, token, downloadStats)
+      } ++
+         createAgentJson(tokenAndStatistics._2)
+      d.mkString("\n")
+    }
+
 
     Source
       .single(tokenAndStatistics)
-      .map{createTokenPayload}
+      .map{createPayload}
       .map{
         zStore.putString(s"stp-agent-${extractLastPart(path)}", _)
       }

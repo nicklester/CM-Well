@@ -390,7 +390,6 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
               val configName = Paths.get(path).getFileName
 
               val sparqlIngestStats = statsIngest
-                .get(s"ingester-$configName")
                 .map { s =>
                   s"""Ingested <span style="color:green"> **${s.ingestedInfotons}** </span> Failed <span style="color:red"> **${s.failedInfotons}** </span>"""
                 }
