@@ -30,8 +30,6 @@ import cmwell.zstore.ZStore
 import com.typesafe.config.ConfigFactory
 import io.circe.Json
 
-import io.circe.syntax._
-
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
@@ -71,13 +69,13 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     case RequestPreviousTokens =>
       context.become(receiveBeforeInitializes(sender() :: recipients))
 
-    case Success(savedTokens: TokenAndStatisticsMap) =>
+    case Success(savedTokens: AgentTokensAndStatisticsCase) =>
       context.become(receiveWithMap(savedTokens))
       recipients.foreach(_ ! ResponseWithPreviousTokens(Right(savedTokens)))
 
     case Failure(ex) =>
       logger.error("cannot read previous tokens infoton")
-      context.become(receiveWithMap(Map.empty))
+      context.become(receiveWithMap(AgentTokensAndStatisticsCase(Map.empty, None, None)))
       recipients.foreach(_ ! ResponseWithPreviousTokens(Left(ex.getMessage)))
 
     case s: DownloadStats =>
@@ -97,14 +95,16 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       data.map(ResponseReference.apply).pipeTo(sender())
   }
 
-  def receiveWithMap(tokensAndStats: TokenAndStatisticsMap): Receive = {
+  def receiveWithMap(tokensAndStats: AgentTokensAndStatisticsCase): Receive = {
     case RequestPreviousTokens =>
       sender() ! ResponseWithPreviousTokens(Right(tokensAndStats))
 
     case ReportNewToken(sensor, token) =>
-      val updatedTokens = tokensAndStats + (sensor -> (token, downloadStats.get(sensor)))
-      saveTokens((updatedTokens, ingestStats))
-      context.become(receiveWithMap(updatedTokens))
+      val updatedTokens = tokensAndStats.sensors + (sensor -> (token, downloadStats.get(sensor)))
+      saveTokens((updatedTokens, ingestStats), downloadStats.get(SparqlTriggeredProcessor.sparqlMaterializerLabel))
+      context.become(receiveWithMap(
+        AgentTokensAndStatisticsCase(updatedTokens, ingestStats, downloadStats.get(SparqlTriggeredProcessor.sparqlMaterializerLabel)))
+      )
 
     case s: DownloadStats =>
       downloadStats += (s.label.getOrElse("") -> s)
@@ -129,7 +129,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       .map(_.payload)
   }
 
-  def saveTokens(tokenAndStatistics: AgentTokensAndStatistics) : Unit = {
+  def saveTokens(tokenAndStatistics: AgentTokensAndStatistics, materializedStats: Option[DownloadStats]) : Unit = {
 
     def createSensorJson(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
       Json.fromFields({
@@ -142,7 +142,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       }).noSpaces
     }
 
-    def createAgentJson(ingestStats: Option[IngestStats]) = {
+    def createAgentJson(ingestStats: Option[IngestStats], materializedStats: Option[DownloadStats]) = {
       Seq(Json.fromFields( {
         (ingestStats match {
           case Some(ingestStats) => {
@@ -150,18 +150,22 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
               ("failedInfotons", Json.fromLong(ingestStats.failedInfotons)))
           }
           case None => Nil
+        }) ++
+        (materializedStats match {
+          case Some(materialized) => {
+            List(("materializedInfotons",Json.fromLong(materialized.receivedInfotons)))
+          }
+          case None => Nil
         })
       }).noSpaces)
     }
 
     def createPayload(tokenAndStatistics: AgentTokensAndStatistics)  = {
-     val d=  tokenAndStatistics._1.foldLeft(Seq.empty[String]) {
+      (tokenAndStatistics._1.foldLeft(Seq.empty[String]) {
         case (agg, (sensor, (token, downloadStats))) => agg :+ createSensorJson(sensor, token, downloadStats)
       } ++
-         createAgentJson(tokenAndStatistics._2)
-      d.mkString("\n")
+        createAgentJson(tokenAndStatistics._2, materializedStats)).mkString("\n")
     }
-
 
     Source
       .single(tokenAndStatistics)

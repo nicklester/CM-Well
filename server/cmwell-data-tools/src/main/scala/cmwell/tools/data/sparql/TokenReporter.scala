@@ -24,6 +24,7 @@ import akka.pattern._
 import akka.stream.scaladsl._
 import akka.stream.{ActorMaterializer, Materializer}
 import cmwell.tools.data.downloader.consumer.Downloader.Token
+import cmwell.tools.data.utils.akka.stats.DownloaderStats.DownloadStats
 import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 import cmwell.tools.data.utils.logging.DataToolsLogging
 
@@ -45,7 +46,7 @@ trait SparqlTriggerProcessorReporter {
     * Store given tokens for a future usage (e.g., in a non-volatile memory)
     * @param tokensAndStats tokens with current statistics to be saved
     */
-  def saveTokens(tokensAndStats: (TokenAndStatisticsMap, Option[IngestStats])): Unit
+  def saveTokens(tokensAndStats: (TokenAndStatisticsMap, Option[IngestStats]), materializedStats: Option[DownloadStats]): Unit
 }
 
 /**
@@ -66,14 +67,18 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080)
 
   def receiveWithMap(tokens: Map[String, Token]): Receive = {
     case RequestPreviousTokens =>
-      sender() ! ResponseWithPreviousTokens(Right(tokens.map {
-        case (sensor, token) => sensor -> (token, None)
-      }))
+      sender() ! ResponseWithPreviousTokens(Right(
+        AgentTokensAndStatisticsCase(
+          tokens.map {
+            case (sensor, token) => sensor -> (token, None)
+          },None,None
+        )
+      ))
     case ReportNewToken(sensor, token) =>
       val updatedTokens = tokens + (sensor -> token)
-      saveTokens(updatedTokens.map {
+      saveTokens((updatedTokens.map {
         case (sensor, token) => (sensor -> (token, None))
-      }, None)
+      }, None), None)
 
       context.become(receiveWithMap(updatedTokens))
     case RequestReference(path) =>
@@ -99,7 +104,7 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080)
   override def getReferencedData(path: String): Future[String] =
     Future.successful(scala.io.Source.fromFile(path).mkString)
 
-  override def saveTokens(tokensAndStats: (TokenAndStatisticsMap, Option[IngestStats])): Unit = {
+  override def saveTokens(tokensAndStats: (TokenAndStatisticsMap, Option[IngestStats]), materializedStats : Option[DownloadStats]): Unit = {
     val tokens = tokensAndStats._1.map {
       case (sensor, (token, _)) => sensor -> token
     }
@@ -136,7 +141,7 @@ class WebExporter(reporter: ActorRef, port: Int = 8080)(implicit system: ActorSy
         case ResponseWithPreviousTokens(Right(tokens)) =>
           val title = "sensors state"
 
-          val (content, _) = tokens.foldLeft("" -> false) {
+          val (content, _) = tokens.sensors.foldLeft("" -> false) {
             case ((agg, evenRow), (sensor, token)) =>
               val style = if (evenRow) "tg-j2zy" else "tg-yw4l"
 
@@ -184,7 +189,7 @@ class WebExporter(reporter: ActorRef, port: Int = 8080)(implicit system: ActorSy
 
 case object RequestPreviousTokens
 
-case class ResponseWithPreviousTokens(tokens: Either[String,TokenAndStatisticsMap])
+case class ResponseWithPreviousTokens(tokens: Either[String,AgentTokensAndStatisticsCase])
 case class ReportNewToken(sensor: String, token: Token)
 case class RequestReference(path: String)
 case class ResponseReference(data: String)
