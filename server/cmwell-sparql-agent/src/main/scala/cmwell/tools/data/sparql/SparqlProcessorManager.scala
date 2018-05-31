@@ -436,7 +436,7 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
 
     val hostUpdatesSource = job.config.hostUpdatesSource.getOrElse(settings.hostUpdatesSource)
 
-    SparqlTriggeredProcessor.loadInitialTokensAndStatistics(Some(tokenReporter)) match {
+    SparqlTriggeredProcessor.loadInitialTokensAndStatistics(Option(tokenReporter)) match {
 
       case Right(initialTokensAndStatistics) =>
         val agent = SparqlTriggeredProcessor
@@ -454,7 +454,8 @@ class SparqlProcessorManager(settings: SparqlProcessorManagerSettings) extends A
             force = job.config.force.getOrElse(false),
             label = label
           )
-          .via(IngesterStats(isStderr = false, reporter = Some(tokenReporter), label = label, initialIngestStats = initialTokensAndStatistics.agent ))
+          .via(IngesterStats(isStderr = false, reporter = Some(tokenReporter), label = label,
+            initialIngestStats = initialTokensAndStatistics.agentIngestStats ))
           .viaMat(KillSwitches.single)(Keep.right)
           .toMat(Sink.ignore)(Keep.both)
           .run()

@@ -69,13 +69,13 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     case RequestPreviousTokens =>
       context.become(receiveBeforeInitializes(sender() :: recipients))
 
-    case Success(savedTokens: AgentTokensAndStatisticsCase) =>
+    case Success(savedTokens: AgentTokensAndStatistics) =>
       context.become(receiveWithMap(savedTokens))
       recipients.foreach(_ ! ResponseWithPreviousTokens(Right(savedTokens)))
 
     case Failure(ex) =>
       logger.error("cannot read previous tokens infoton")
-      context.become(receiveWithMap(AgentTokensAndStatisticsCase(Map.empty, None, None)))
+      context.become(receiveWithMap(AgentTokensAndStatistics(Map.empty, None, None)))
       recipients.foreach(_ ! ResponseWithPreviousTokens(Left(ex.getMessage)))
 
     case s: DownloadStats =>
@@ -95,7 +95,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       data.map(ResponseReference.apply).pipeTo(sender())
   }
 
-  def receiveWithMap(tokensAndStats: AgentTokensAndStatisticsCase): Receive = {
+  def receiveWithMap(tokensAndStats: AgentTokensAndStatistics): Receive = {
     case RequestPreviousTokens =>
       sender() ! ResponseWithPreviousTokens(Right(tokensAndStats))
 
@@ -103,7 +103,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       val updatedTokens = tokensAndStats.sensors + (sensor -> (token, downloadStats.get(sensor)))
       saveTokens((updatedTokens, ingestStats), downloadStats.get(SparqlTriggeredProcessor.sparqlMaterializerLabel))
       context.become(receiveWithMap(
-        AgentTokensAndStatisticsCase(updatedTokens, ingestStats, downloadStats.get(SparqlTriggeredProcessor.sparqlMaterializerLabel)))
+        AgentTokensAndStatistics(updatedTokens, ingestStats, downloadStats.get(SparqlTriggeredProcessor.sparqlMaterializerLabel)))
       )
 
     case s: DownloadStats =>

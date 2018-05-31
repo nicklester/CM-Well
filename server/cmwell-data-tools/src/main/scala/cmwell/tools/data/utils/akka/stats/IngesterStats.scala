@@ -38,7 +38,7 @@ object IngesterStats {
             interval: FiniteDuration = 1.second,
             reporter: Option[ActorRef] = None,
             label: Option[String] = None,
-            initialIngestStats: Option[IngestStats]) =
+            initialIngestStats: Option[IngestStats] = None) =
     new IngesterStats(isStderr, initDelay, interval, reporter, label, initialIngestStats)
 }
 
@@ -47,7 +47,7 @@ class IngesterStats(isStderr: Boolean,
                     interval: FiniteDuration = 1.second,
                     reporter: Option[ActorRef] = None,
                     label: Option[String] = None,
-                    initialIngestStats: Option[IngestStats])
+                    initialIngestStats: Option[IngestStats] = None)
     extends GraphStage[FlowShape[IngestEvent, IngestEvent]]
     with DataToolsLogging {
   val in = Inlet[IngestEvent]("ingest-stats.in")

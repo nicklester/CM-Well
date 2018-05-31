@@ -68,7 +68,7 @@ class FileReporterActor(stateFile: Option[String], webPort: Int = 8080)
   def receiveWithMap(tokens: Map[String, Token]): Receive = {
     case RequestPreviousTokens =>
       sender() ! ResponseWithPreviousTokens(Right(
-        AgentTokensAndStatisticsCase(
+        AgentTokensAndStatistics(
           tokens.map {
             case (sensor, token) => sensor -> (token, None)
           },None,None
@@ -189,7 +189,7 @@ class WebExporter(reporter: ActorRef, port: Int = 8080)(implicit system: ActorSy
 
 case object RequestPreviousTokens
 
-case class ResponseWithPreviousTokens(tokens: Either[String,AgentTokensAndStatisticsCase])
+case class ResponseWithPreviousTokens(tokens: Either[String,AgentTokensAndStatistics])
 case class ReportNewToken(sensor: String, token: Token)
 case class RequestReference(path: String)
 case class ResponseReference(data: String)

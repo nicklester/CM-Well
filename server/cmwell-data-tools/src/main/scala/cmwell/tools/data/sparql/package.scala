@@ -20,9 +20,10 @@ import cmwell.tools.data.utils.akka.stats.IngesterStats.IngestStats
 
 package object sparql {
 
-  case class AgentTokensAndStatisticsCase(sensors: TokenAndStatisticsMap, agent: Option[IngestStats], materialized: Option[DownloadStats] )
+  case class AgentTokensAndStatistics(sensors: TokenAndStatisticsMap,
+                                      agentIngestStats: Option[IngestStats],
+                                      materializedStats: Option[DownloadStats] )
 
-  type AgentTokensAndStatistics = (TokenAndStatisticsMap,Option[IngestStats])
   type TokenAndStatisticsMap = Map[String, TokenAndStatistics]
   type TokenAndStatistics = (Token, Option[DownloadStats])
 }

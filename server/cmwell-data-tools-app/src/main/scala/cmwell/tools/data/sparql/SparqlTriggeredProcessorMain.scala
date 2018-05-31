@@ -78,7 +78,8 @@ object SparqlTriggeredProcessorMain extends App with DataToolsLogging {
       config = config,
       baseUrl = Opts.srcHost(),
       isBulk = Opts.bulk(),
-      tokenReporter = Some(tokenFileReporter)
+      tokenReporter = Some(tokenFileReporter),
+      Right(AgentTokensAndStatistics(Map.empty[String, TokenAndStatistics],None,None))
     )
     .map { case (data, _) => data }
     .via(GroupChunker(GroupChunker.formatToGroupExtractor("ntriples")))

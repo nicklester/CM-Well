@@ -43,7 +43,7 @@ object StpUtil extends DataToolsLogging {
   def readPreviousTokensWithRetry(baseUrl: String, path: String, format: String, zStore: ZStore)
                                  (implicit context: ExecutionContext) = {
 
-    def shouldRetry(action: String): (Try[AgentTokensAndStatisticsCase], RetryParams) => ShouldRetry[RetryParams] = {
+    def shouldRetry(action: String): (Try[AgentTokensAndStatistics], RetryParams) => ShouldRetry[RetryParams] = {
       import scala.language.implicitConversions
       implicit def asFiniteDuration(d: Duration) = scala.concurrent.duration.Duration.fromNanos(d.toNanos);
       {
@@ -73,12 +73,12 @@ object StpUtil extends DataToolsLogging {
   }
 
   def readPreviousTokens(baseUrl: String, path: String, zStore: ZStore)
-                        (implicit context: ExecutionContext) : Future[AgentTokensAndStatisticsCase]  = {
+                        (implicit context: ExecutionContext) : Future[AgentTokensAndStatistics]  = {
 
     zStore.getStringOpt(s"stp-agent-${extractLastPart(path)}", dontRetry = true).map {
       case None => {
         // No such key - start STP from scratch
-        AgentTokensAndStatisticsCase(Map.newBuilder[String, TokenAndStatistics].result(), None, None)
+        AgentTokensAndStatistics(Map.newBuilder[String, TokenAndStatistics].result(), None, None)
       }
       case Some(tokenPayload) => {
         // Key exists and has returned
@@ -111,7 +111,7 @@ object StpUtil extends DataToolsLogging {
         }.foldLeft(Map.newBuilder[String, TokenAndStatistics])(_.+=(_))
         .result
 
-        AgentTokensAndStatisticsCase(sensors, ingestStats, materializedStats)
+        AgentTokensAndStatistics(sensors, ingestStats, materializedStats)
 
       }
     }

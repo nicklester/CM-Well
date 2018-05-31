@@ -53,7 +53,7 @@ object SparqlTriggeredProcessor extends DataToolsLogging {
 
   def loadInitialTokensAndStatistics(tokenReporter : Option[ActorRef])
                                     (implicit system: ActorSystem, mat: Materializer, ec: ExecutionContext) = tokenReporter match {
-    case None => Right(AgentTokensAndStatisticsCase(Map.empty[String, TokenAndStatistics], None, None))
+    case None => Right(AgentTokensAndStatistics(Map.empty[String, TokenAndStatistics], None, None))
     case Some(reporter) =>
       import akka.pattern._
       implicit val t = akka.util.Timeout(1.minute)
@@ -67,14 +67,14 @@ object SparqlTriggeredProcessor extends DataToolsLogging {
   }
 
   def listen(
-    config: Config,
-    baseUrl: String,
-    isBulk: Boolean = false,
-    tokenReporter: Option[ActorRef] = None,
-    initialTokensAndStatistics: Either[String,AgentTokensAndStatisticsCase],
-    label: Option[String] = None,
-    distinctWindowSize: FiniteDuration = 10.seconds,
-    infotonGroupSize: Integer = 100
+              config: Config,
+              baseUrl: String,
+              isBulk: Boolean = false,
+              tokenReporter: Option[ActorRef] = None,
+              initialTokensAndStatistics: Either[String,AgentTokensAndStatistics],
+              label: Option[String] = None,
+              distinctWindowSize: FiniteDuration = 10.seconds,
+              infotonGroupSize: Integer = 100
   )(implicit system: ActorSystem, mat: Materializer, ec: ExecutionContext) = {
 
     new SparqlTriggeredProcessor(config = config,
@@ -97,7 +97,7 @@ class SparqlTriggeredProcessor(config: Config,
                                infotonGroupSize: Integer)
     extends DataToolsLogging {
 
-  def listen(initialTokensAndStatistics: Either[String,AgentTokensAndStatisticsCase])(implicit system: ActorSystem, mat: Materializer, ec: ExecutionContext) = {
+  def listen(initialTokensAndStatistics: Either[String,AgentTokensAndStatistics])(implicit system: ActorSystem, mat: Materializer, ec: ExecutionContext) = {
 
     def addStatsToSource(id: String,
                          source: Source[(ByteString, Option[SensorContext]), _],
@@ -298,7 +298,7 @@ class SparqlTriggeredProcessor(config: Config,
         // execute sparql queries on populated paths
         addStatsToSource(
           id = SparqlTriggeredProcessor.sparqlMaterializerLabel,
-          initialDownloadStats = tokensAndStatistics.materialized,
+          initialDownloadStats = tokensAndStatistics.materializedStats,
           source = SparqlProcessor.createSparqlSourceFromPaths(
             baseUrl = baseUrl,
             sparqlQuery = processedConfig.sparqlMaterializer,
