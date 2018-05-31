@@ -27,7 +27,6 @@ import cmwell.tools.data.utils.text.Tokens
 
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.util.Success
 
 case class SensorContext(name: String, token: String, horizon: Boolean, remainingInfotons: Option[Long])
 
@@ -102,7 +101,6 @@ class SparqlTriggeredProcessor(config: Config,
 
     def addStatsToSource(id: String,
                          source: Source[(ByteString, Option[SensorContext]), _],
-                         //initialDownloadStats: Option[TokenAndStatisticsMap] = None) = {
                          initialDownloadStats: Option[DownloadStats] = None) = {
       source.via(
         DownloaderStats(
@@ -113,21 +111,6 @@ class SparqlTriggeredProcessor(config: Config,
         )
       )
     }
-
-    /*
-    val savedTokensAndStatistics: Either[String,AgentTokensAndStatisticsCase] = tokenReporter match {
-      case None => Right(AgentTokensAndStatisticsCase(Map.empty[String, TokenAndStatistics], None, None))
-      case Some(reporter) =>
-        import akka.pattern._
-        implicit val t = akka.util.Timeout(1.minute)
-        val result = (reporter ? RequestPreviousTokens)
-          .mapTo[ResponseWithPreviousTokens]
-          .map {
-            case ResponseWithPreviousTokens(tokens) => tokens
-            case x => logger.error(s"did not receive previous tokens: $x"); Left(s"did not receive previous tokens: $x")
-          }
-        Await.result(result, 1.minute)
-    }*/
 
     def getReferencedData(path: String) = tokenReporter match {
       case None => Future.successful("")
