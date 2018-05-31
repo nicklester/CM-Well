@@ -75,7 +75,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
     case Failure(ex) =>
       logger.error("cannot read previous tokens infoton")
-      context.become(receiveWithMap(AgentTokensAndStatistics(Map.empty, None, None)))
+      context.become(receiveWithMap(AgentTokensAndStatistics(Map.empty)))
       recipients.foreach(_ ! ResponseWithPreviousTokens(Left(ex.getMessage)))
 
     case s: DownloadStats =>
@@ -101,10 +101,11 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
 
     case ReportNewToken(sensor, token) =>
       val updatedTokens = tokensAndStats.sensors + (sensor -> (token, downloadStats.get(sensor)))
-      saveTokens((updatedTokens, ingestStats), downloadStats.get(SparqlTriggeredProcessor.sparqlMaterializerLabel))
-      context.become(receiveWithMap(
-        AgentTokensAndStatistics(updatedTokens, ingestStats, downloadStats.get(SparqlTriggeredProcessor.sparqlMaterializerLabel)))
-      )
+      val agentTokensAndStatistics = AgentTokensAndStatistics(updatedTokens,
+        ingestStats,downloadStats.get(SparqlTriggeredProcessor.sparqlMaterializerLabel))
+
+      saveTokens(agentTokensAndStatistics)
+      context.become(receiveWithMap(agentTokensAndStatistics))
 
     case s: DownloadStats =>
       downloadStats += (s.label.getOrElse("") -> s)
@@ -129,7 +130,7 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
       .map(_.payload)
   }
 
-  def saveTokens(tokenAndStatistics: AgentTokensAndStatistics, materializedStats: Option[DownloadStats]) : Unit = {
+  def saveTokens(tokenAndStatistics: AgentTokensAndStatistics) : Unit = {
 
     def createSensorJson(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
       Json.fromFields({
@@ -161,10 +162,10 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     }
 
     def createPayload(tokenAndStatistics: AgentTokensAndStatistics)  = {
-      (tokenAndStatistics._1.foldLeft(Seq.empty[String]) {
+      (tokenAndStatistics.sensors.foldLeft(Seq.empty[String]) {
         case (agg, (sensor, (token, downloadStats))) => agg :+ createSensorJson(sensor, token, downloadStats)
       } ++
-        createAgentJson(tokenAndStatistics._2, materializedStats)).mkString("\n")
+        createAgentJson(tokenAndStatistics.agentIngestStats, tokenAndStatistics.materializedStats)).mkString("\n")
     }
 
     Source

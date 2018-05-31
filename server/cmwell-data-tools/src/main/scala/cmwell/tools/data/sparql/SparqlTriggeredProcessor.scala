@@ -71,7 +71,8 @@ object SparqlTriggeredProcessor extends DataToolsLogging {
               baseUrl: String,
               isBulk: Boolean = false,
               tokenReporter: Option[ActorRef] = None,
-              initialTokensAndStatistics: Either[String,AgentTokensAndStatistics],
+              initialTokensAndStatistics: Either[String,AgentTokensAndStatistics] =
+                Right(AgentTokensAndStatistics(Map.empty[String, TokenAndStatistics],None,None)),
               label: Option[String] = None,
               distinctWindowSize: FiniteDuration = 10.seconds,
               infotonGroupSize: Integer = 100

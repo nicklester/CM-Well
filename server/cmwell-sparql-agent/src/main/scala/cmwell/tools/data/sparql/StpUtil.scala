@@ -78,7 +78,7 @@ object StpUtil extends DataToolsLogging {
     zStore.getStringOpt(s"stp-agent-${extractLastPart(path)}", dontRetry = true).map {
       case None => {
         // No such key - start STP from scratch
-        AgentTokensAndStatistics(Map.newBuilder[String, TokenAndStatistics].result(), None, None)
+        AgentTokensAndStatistics(Map.newBuilder[String, TokenAndStatistics].result())
       }
       case Some(tokenPayload) => {
         // Key exists and has returned

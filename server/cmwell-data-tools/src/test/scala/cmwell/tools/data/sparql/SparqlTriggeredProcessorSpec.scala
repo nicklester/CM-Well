@@ -46,8 +46,6 @@ import collection.JavaConverters._
   val path1 = "/path1/subject-1\tlastModified1-1\tuuid1-1"
   val path2 = "/path2/subject-2\tlastModified2-1\tuuid2-1"
 
-  val initialTokensAndStatistics = Right(AgentTokensAndStatistics(Map.empty[String, TokenAndStatistics],None,None))
-
   override protected def afterAll(): Unit = {
     system.terminate()
     super.afterAll()
@@ -97,7 +95,7 @@ import collection.JavaConverters._
 
     val baseUrl = s"localhost:${wireMockServer.port}"
 
-    val (killSwitch, result) = SparqlTriggeredProcessor.listen(config = config, baseUrl = baseUrl, initialTokensAndStatistics=initialTokensAndStatistics)
+    val (killSwitch, result) = SparqlTriggeredProcessor.listen(config = config, baseUrl = baseUrl)
       .viaMat(KillSwitches.single)(Keep.right)
       .toMat(Sink.fold(blank){case (agg, (line, _)) => agg ++ line ++ endl})(Keep.both)
       .run()
@@ -163,7 +161,7 @@ import collection.JavaConverters._
 
     val baseUrl = s"localhost:${wireMockServer.port}"
 
-    val (killSwitch, result) = SparqlTriggeredProcessor.listen(config = config, baseUrl = baseUrl, initialTokensAndStatistics=initialTokensAndStatistics)
+    val (killSwitch, result) = SparqlTriggeredProcessor.listen(config = config, baseUrl = baseUrl)
       .viaMat(KillSwitches.single)(Keep.right)
       .toMat(Sink.fold(blank){case (agg, (line, _)) => agg ++ line ++ endl})(Keep.both)
       .run()
@@ -245,8 +243,7 @@ import collection.JavaConverters._
 
     val baseUrl = s"localhost:${wireMockServer.port}"
 
-    val (killSwitch, result) = SparqlTriggeredProcessor.listen(config = config, baseUrl = baseUrl, distinctWindowSize = 2.seconds,
-      initialTokensAndStatistics=initialTokensAndStatistics)
+    val (killSwitch, result) = SparqlTriggeredProcessor.listen(config = config, baseUrl = baseUrl, distinctWindowSize = 2.seconds)
       .viaMat(KillSwitches.single)(Keep.right)
       .toMat(Sink.fold(blank){case (agg, (line, _)) => agg ++ line ++ endl})(Keep.both)
       .run()
