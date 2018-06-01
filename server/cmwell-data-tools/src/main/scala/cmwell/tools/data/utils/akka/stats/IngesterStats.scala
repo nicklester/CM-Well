@@ -79,6 +79,8 @@ class IngesterStats(isStderr: Boolean,
 
         // Initialise persisted statistics
         initialIngestStats.foreach { stats =>
+          logger.debug(s"${name} Loading statistics initial state of Ingested Infotons: ${stats.ingestedInfotons}," +
+            s" Failed Infotons ${stats.failedInfotons}")
           totalIngestedInfotons.mark(stats.ingestedInfotons)
           totalFailedInfotons.mark(stats.failedInfotons)
         }
