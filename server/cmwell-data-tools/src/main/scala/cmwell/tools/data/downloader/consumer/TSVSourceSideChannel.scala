@@ -20,7 +20,8 @@ import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream._
 import akka.stream.scaladsl.{Broadcast, GraphDSL, Keep, Sink, Source}
-import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
+import akka.stream.stage._
+import akka.util.ByteString
 import cmwell.tools.data.downloader.consumer.Downloader._
 import cmwell.tools.data.utils.ArgsManipulations
 import cmwell.tools.data.utils.ArgsManipulations.{HttpAddress, formatHost}
@@ -29,8 +30,8 @@ import cmwell.tools.data.utils.akka.{HttpConnections, lineSeparatorFrame}
 import cmwell.tools.data.utils.logging.DataToolsLogging
 import cmwell.tools.data.utils.text.Tokens
 import cmwell.util.akka.http.HttpZipDecoder
-import scala.concurrent.ExecutionContext
 
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.{FiniteDuration, _}
 import scala.collection.mutable
 import scala.concurrent.Future
@@ -40,16 +41,16 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 case class PushedTsv(token: Downloader.Token, tsv: Downloader.TsvData, horizon: Boolean, remaining: Option[Long])
 
-object TsvSource {
+object TsvSourceSideChannel {
   def apply(threshold: Long = 100,
             params: String = "",
             isBulk: Boolean = false,
             baseUrl: String,
             label: Option[String] = None)
-             = new TsvSource(threshold,params,baseUrl,isBulk,label)
+  = new TsvSourceSideChannel(threshold,params,baseUrl,isBulk,label)
 }
 
-class TsvSource(threshold : Long,
+class TsvSourceSideChannel(threshold : Long,
                 params: String = "",
                 baseUrl: String,
                 isBulk: Boolean = false,
@@ -63,19 +64,18 @@ class TsvSource(threshold : Long,
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
+    var callback: AsyncCallback[Seq[(Token, Tsv)]] = _
+    var asyncCallInProgress = false
+
     private var initialToken : Token = _
     private var currToken: Token = _
     private var buf: mutable.Queue[Option[(Token, TsvData)]] = mutable.Queue()
     private var consumeComplete = false
     private var remainingInfotons : Option[Long] = None
     private var currConsumeState: ConsumeState = SuccessState(0)
-    val uuidsFromCurrentToken = mutable.Set.empty[Uuid]
-    val receivedUuids = mutable.Set.empty[Uuid]
-    private var currKillSwitch: Option[KillSwitch] = None
 
     implicit val system: ActorSystem = ActorSystem.create("reactive-tools-system")
     implicit val mat: Materializer = ActorMaterializer()
-
 
     private val HttpAddress(protocol, host, port, _) =
       ArgsManipulations.extractBaseUrl(baseUrl)
@@ -83,6 +83,20 @@ class TsvSource(threshold : Long,
       HttpConnections.newHostConnectionPool[Option[_]](host, port, protocol)
 
     override def preStart(): Unit = {
+
+      def bufferMessageAndEmulatePull(incoming: Seq[(Token, Tsv)]): Unit = {
+        asyncCallInProgress = false
+        incoming.foreach{
+          case (token, tsv: TsvData)=>{
+            buf += Some(token,tsv)
+          }
+        }
+
+        this.getHandler(out).onPull()
+
+      }
+
+      callback = getAsyncCallback[Seq[(Token, Tsv)]](bufferMessageAndEmulatePull)
 
     }
 
@@ -138,7 +152,7 @@ class TsvSource(threshold : Long,
       * @param token cm-well position token to consume its data
       * @return optional next token value, otherwise None when there is no data left to be consumed
       */
-    def sendNextChunkRequest(token: String): Future[Option[String]] = {
+    def sendNextChunkRequest(token: String): Future[(Option[String], Future[Seq[(Downloader.Token, Downloader.Tsv)]])] = {
 
       /**
         * Creates http request for consuming data
@@ -175,10 +189,8 @@ class TsvSource(threshold : Long,
         HttpRequest(uri = uri).addHeader(RawHeader("Accept-Encoding", "gzip"))
       }
 
-      uuidsFromCurrentToken.clear()
-
-      val source: Source[Token, (Future[Option[Token]], UniqueKillSwitch)] = {
-        val src: Source[(Option[String], Source[(Token, Tsv), Any]), NotUsed] =
+     // val source: Source[Token, (Future[Option[Token]], UniqueKillSwitch)] = {
+        val src: Source[(Option[String], Future[Seq[(Downloader.Token,Downloader.Tsv)]]),Any] =
           Source
             .single(createRequestFromToken(token, None))
             .map(_ -> None)
@@ -192,11 +204,13 @@ class TsvSource(threshold : Long,
                 e.discardBytes()
 
                 logger.error(s"HTTP 429: too many requests token=$token")
-                None -> Source.failed(new Exception("too many requests"))
+                //None -> Source.failed(new Exception("too many requests"))
+                None -> Future.failed(new Exception("too many requests"))
 
               case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.NoContent =>
                 e.discardBytes()
-                None -> Source.empty
+                None -> Future.failed(new Exception("empty"))
+
               case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.OK || s == StatusCodes.PartialContent =>
 
                 remainingInfotons = getNLeft(h) match {
@@ -220,7 +234,7 @@ class TsvSource(threshold : Long,
                   .map(extractTsv)
                   .map(token -> _)
 
-                Some(nextToken) -> dataSource
+                Some(nextToken) -> dataSource.toMat(Sink.seq)(Keep.right).run()
 
               case (Success(HttpResponse(s, h, e, _)), _) =>
                 e.toStrict(1.minute).onComplete {
@@ -238,102 +252,74 @@ class TsvSource(threshold : Long,
                     )
                 }
 
-                Some(token) -> Source.failed(new Exception(s"Status is $s"))
+                Some(token) -> Future.failed(new Exception(s"Status is $s"))
 
               case x =>
                 logger.error(s"unexpected message: $x")
-                Some(token) -> Source.failed(
+                Some(token) -> Future.failed(
                   new UnsupportedOperationException(x.toString)
                 )
             }
 
-        val tokenSink = Sink.last[(Option[String], Source[(Token, Tsv), Any])]
-        //The below is actually alsoToMat but with eagerCancel = true
-        val srcWithSink = Source
-          .fromGraph(GraphDSL.create(tokenSink) { implicit builder => sink =>
-            import GraphDSL.Implicits._
-            val tokenSource = builder.add(src)
-            val bcast = builder.add(
-              Broadcast[(Option[String], Source[(Token, Tsv), Any])](2, eagerCancel = true)
-            )
-            tokenSource ~> bcast.in
-            bcast.out(1) ~> sink
-            SourceShape(bcast.out(0))
-          })
-          .mapMaterializedValue(_.map { case (nextToken, _) => nextToken })
-        srcWithSink
-          .map { case (_, dataSource) => dataSource }
-          .flatMapConcat(identity)
-          .collect {
-            case (token, tsv: TsvData) =>
-              // if uuid was not emitted before, write it to buffer
-              if (receivedUuids.add(tsv.uuid)) {
-                buf += Some((token, tsv))
-              }
+      src.toMat(Sink.head)(Keep.right).run
 
-              uuidsFromCurrentToken.add(tsv.uuid)
-              token
-          }
-          .viaMat(KillSwitches.single)(Keep.both)
-      }
-
-      val (result, killSwitch) = source
-        .toMat(Sink.ignore) {
-          case ((token, killSwitch), done) =>
-            done.flatMap(_ => token) -> killSwitch
-        }
-        .run()
-
-      currKillSwitch = Some(killSwitch)
-
-      result
     }
 
 
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
         initialToken = grab(in)
-
-        // Start buffer
-
-
-
         println(initialToken)
         pull(in)
       }
     })
 
-/*
-    def getNext = {
-      buf += Some((new Downloader.Token("aaa"),
-        new consumer.Downloader.TsvData(ByteString.empty,ByteString.empty,ByteString.empty,ByteString.empty))
-    }
-*/
-
-
-
-
 
     setHandler(out, new OutHandler {
       override def onPull(): Unit = {
-        //pullTsv()
-        pushHead()
+
+        if (buf.nonEmpty){
+          buf.dequeue().foreach(f=>{
+            val d = PushedTsv(f._1,f._2,false, Some(10))
+            push(out,d)
+          })
 
 
-        pull(in)
+
+        }
+
+        if(buf.isEmpty && !asyncCallInProgress){
+          grabAndInvokeWithRetry(sendNextChunkRequest(currToken))
+
+        }
+
+        logger.warn("test")
+
+
       }
+
     })
 
 
 
+    private def grabAndInvokeWithRetry(future: Future[(Option[String], Future[Seq[(Token, Tsv)]])]): Unit = {
+      asyncCallInProgress = true
+      future.onComplete {
+        case Success(tokenWithData) => {
+          tokenWithData._2.onComplete{
+            case Success(data)=>
+             callback.invoke(data)
+            case Failure(ex)=>
+              logger.error(ex.toString)
+          }
+        }
+        case Failure(ex) => {
+            logger.error(ex.toString)
+        }
+      }(materializer.executionContext)
 
-
-
-
+    }
 
   }
-
-
-
 
 }

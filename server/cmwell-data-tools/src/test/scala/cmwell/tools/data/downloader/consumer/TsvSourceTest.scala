@@ -15,9 +15,82 @@
 
 package cmwell.tools.data.downloader.consumer
 
+import akka.actor.ActorSystem
+import akka.http.scaladsl.model.StatusCodes
+import akka.stream.scaladsl.Source
+import akka.stream.{ActorMaterializer, Materializer}
 import cmwell.tools.data.helpers.BaseWiremockSpec
+import cmwell.tools.data.utils.akka.HeaderOps.{CMWELL_N, CMWELL_POSITION}
+import com.github.tomakehurst.wiremock.client.WireMock.{aResponse, get, stubFor, urlPathMatching}
+import com.github.tomakehurst.wiremock.stubbing.Scenario
 
-class TsvSourceTest extends BaseWiremockSpec{
+import scala.concurrent.Future
 
+class TsvSourceTest extends BaseWiremockSpec {
+
+  val scenario = "scenario"
+
+  implicit val system: ActorSystem = ActorSystem.create("reactive-tools-system")
+  implicit val mat: Materializer = ActorMaterializer()
+
+  override protected def afterAll(): Unit = {
+    system.terminate()
+    super.afterAll()
+  }
+
+
+  val tsvs = List(
+    "path1\tlastModified1\tuuid1\tindexTime1\n",
+    "path2\tlastModified2\tuuid2\tindexTime2\n"
+  )
+
+
+  it should "work" in {
+
+    val downloadSuccess1 = "download-success-1"
+
+    stubFor(get(urlPathMatching("/.*")).inScenario(scenario)
+      .whenScenarioStateIs(Scenario.STARTED)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.OK.intValue)
+        .withHeader(CMWELL_POSITION, "3AAAMHwv"))
+      .willSetStateTo(downloadSuccess1)
+    )
+
+    stubFor(get(urlPathMatching("/_consume")).inScenario(scenario)
+      .whenScenarioStateIs(downloadSuccess1)
+      .willReturn(aResponse()
+        .withBody(tsvs.mkString)
+        .withStatus(StatusCodes.OK.intValue)
+        .withHeader(CMWELL_N, (tsvs.size).toString)
+        .withHeader(CMWELL_POSITION, "3AAAMHwv"))
+      .willSetStateTo(downloadSuccess1)
+    )
+
+    val initTokenFuture = Future{
+      new Downloader.Token("sqwqweq")
+    }
+
+
+
+    val source = Source.fromFuture(initTokenFuture)
+      .via(TsvSourceSideChannel(label=Some("df"),baseUrl = s"localhost:${wireMockServer.port}",threshold = 10))
+
+
+    val result = source.take(1).map(_=>1).runFold(0)(_ + _)
+
+    result.flatMap{_ => 1 should be (1)}
+
+    /*
+    val future = source.take(1)
+      .toMat(Sink.seq)(Keep.right).run
+    */
+
+
+
+
+
+    //assert( future.map(_ => 1) == 1)
+  }
 
 }

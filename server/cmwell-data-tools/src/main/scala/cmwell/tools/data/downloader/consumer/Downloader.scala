@@ -948,11 +948,6 @@ class Downloader(
 
     Source
       .fromFuture(initTokenFuture)
-      .via(TsvSource(label=Some("df")))
-
-
-    Source
-      .fromFuture(initTokenFuture)
       .flatMapConcat { initToken =>
         Source
           .unfoldAsync(new FakeState(initToken)) { fs =>
