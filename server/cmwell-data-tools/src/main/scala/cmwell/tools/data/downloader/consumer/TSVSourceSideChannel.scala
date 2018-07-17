@@ -35,7 +35,6 @@ import scala.concurrent.Future
 import scala.util.{Failure, Success, Try}
 import scala.concurrent.ExecutionContext.Implicits.global
 
-
 case class PushedTsv(token: Downloader.Token, tsv: Downloader.TsvData, horizon: Boolean, remaining: Option[Long])
 
 object TsvSourceSideChannel {
@@ -53,10 +52,10 @@ class TsvSourceSideChannel(threshold : Long,
                 baseUrl: String,
                 consumeLengthHint: Option[Int],
                 isBulk: Boolean = false,
-                label: Option[String] = None) extends GraphStage[FlowShape[Downloader.Token, PushedTsv]] with DataToolsLogging {
+                label: Option[String] = None) extends GraphStage[FlowShape[Downloader.Token, ((Token,TsvData),Boolean,Option[Long])]] with DataToolsLogging {
 
   val in = Inlet[Downloader.Token]("Map.in")
-  val out = Outlet[PushedTsv]("Map.out")
+  val out = Outlet[((Token,TsvData),Boolean,Option[Long])]("Map.out")
   override val shape = FlowShape.of(in, out)
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
@@ -219,7 +218,7 @@ class TsvSourceSideChannel(threshold : Long,
       override def onPull(): Unit = {
         if (buf.nonEmpty){
           buf.dequeue().foreach(f=>{
-            val d = PushedTsv(f._1,f._2,false, Some(10))
+            val d =  ((f._1,f._2),false,remainingInfotons)
             push(out,d)
           })
         }

@@ -855,8 +855,6 @@ class Downloader(
     implicit ec: ExecutionContext
   ): Source[((Token, TsvData), Boolean, Option[Long]), NotUsed] = {
 
-    import akka.pattern._
-
     val initTokenFuture = token match {
       case Some(t) => Future.successful(t)
       case None =>
@@ -869,103 +867,9 @@ class Downloader(
                             isBulk = isBulk)
     }
 
-    val bufferFillerActor = system.actorOf(
-      Props(
-        new BufferFillerActor(
-          threshold = (prefetchBufferSize * 0.1).toInt,
-          initToken = initTokenFuture,
-          baseUrl = baseUrl,
-          params = params,
-          isBulk = isBulk,
-          updateFreq = updateFreq,
-          label = label
-        )
-      )
+    Source.fromFuture(initTokenFuture).via(TsvSourceSideChannel(label=Some("df"),baseUrl = baseUrl,threshold = 10)).filterNot(
+      downloadedInfotonData => downloadedInfotonData._1._1 !=null && downloadedInfotonData._1._2 !=null
     )
 
-    class FakeState(initToken: Token) {
-
-      var currConsumeState: ConsumeState = SuccessState(0)
-
-      // indicates if no data is left to be consumed
-      var noDataLeft = false
-
-      // init of filling buffer with consumed data from token
-      //      Future { blocking { fillBuffer(initToken) } }
-
-      //      var consumerStatsActor = system.actorOf(Props(new ConsumerStatsActor(baseUrl, initToken, params)))
-
-      /**
-        * Gets next data element from buffer
-        *
-        * @return Option of position token -> Tsv data element
-        */
-      def next(): Future[Option[(Token, TsvData, Boolean, Option[Long])]] = {
-        implicit val timeout = akka.util.Timeout(5.seconds)
-
-        val elementFuture = (bufferFillerActor ? BufferFillerActor.GetData)
-          .mapTo[Option[(Token, TsvData, Boolean, Option[Long])]]
-
-        elementFuture
-          .flatMap(element => {
-
-            element match {
-              case Some((null, null, hz, remaining)) =>
-                val delay = 10.seconds
-                logger.info(
-                  s"Got empty result. Waiting for $delay before passing on the empty element."
-                )
-                akka.pattern.after(delay, system.scheduler)(
-                  Future.successful(Some((null, null, hz, remaining)))
-                )
-              case Some((token, tsvData, hz, remaining)) =>
-                Future.successful(Some(token, tsvData, hz, remaining))
-              case None =>
-                noDataLeft = true // received the signal of last element in buffer
-                Future.successful(None)
-              case null if noDataLeft =>
-                logger.debug("buffer is empty and noDataLeft=true")
-                Future.successful(None) // tried to get new data but no data available
-              case x =>
-                logger.error(s"unexpected message: $x")
-                Future.successful(None)
-            }
-
-          })
-          .recoverWith {
-            case ex =>
-              logger.error(
-                "Getting data from BufferFillerActor failed with an exception: ",
-                ex
-              )
-              akka.pattern.after(1.second, system.scheduler)(next())
-          }
-
-      }
-
-    }
-
-
-    Source
-      .fromFuture(initTokenFuture)
-      .flatMapConcat { initToken =>
-        Source
-          .unfoldAsync(new FakeState(initToken)) { fs =>
-            fs.next().map {
-              case Some(tokenAndData) => {
-                Some(
-                  fs -> ((tokenAndData._1, tokenAndData._2), tokenAndData._3, tokenAndData._4)
-                )
-              }
-              case None => {
-                None
-              }
-            }
-          }
-          .filterNot(
-            downloadedInfotonData => downloadedInfotonData._1._1 == null && downloadedInfotonData._1._2 == null
-          )
-          .via(BufferFillerKiller(bufferFillerActor))
-      }
   }
 }
