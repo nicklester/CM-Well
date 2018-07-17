@@ -14,14 +14,12 @@
   */
 package cmwell.tools.data.downloader.consumer
 
-import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream._
-import akka.stream.scaladsl.{Broadcast, GraphDSL, Keep, Sink, Source}
+import akka.stream.scaladsl.{Keep, Sink, Source}
 import akka.stream.stage._
-import akka.util.ByteString
 import cmwell.tools.data.downloader.consumer.Downloader._
 import cmwell.tools.data.utils.ArgsManipulations
 import cmwell.tools.data.utils.ArgsManipulations.{HttpAddress, formatHost}
@@ -31,8 +29,7 @@ import cmwell.tools.data.utils.logging.DataToolsLogging
 import cmwell.tools.data.utils.text.Tokens
 import cmwell.util.akka.http.HttpZipDecoder
 
-import scala.concurrent.ExecutionContext
-import scala.concurrent.duration.{FiniteDuration, _}
+import scala.concurrent.duration._
 import scala.collection.mutable
 import scala.concurrent.Future
 import scala.util.{Failure, Success, Try}
@@ -46,13 +43,15 @@ object TsvSourceSideChannel {
             params: String = "",
             isBulk: Boolean = false,
             baseUrl: String,
+            consumeLengthHint: Option[Int] = Some(100),
             label: Option[String] = None)
-  = new TsvSourceSideChannel(threshold,params,baseUrl,isBulk,label)
+  = new TsvSourceSideChannel(threshold,params,baseUrl,consumeLengthHint,isBulk,label)
 }
 
 class TsvSourceSideChannel(threshold : Long,
                 params: String = "",
                 baseUrl: String,
+                consumeLengthHint: Option[Int],
                 isBulk: Boolean = false,
                 label: Option[String] = None) extends GraphStage[FlowShape[Downloader.Token, PushedTsv]] with DataToolsLogging {
 
@@ -60,11 +59,9 @@ class TsvSourceSideChannel(threshold : Long,
   val out = Outlet[PushedTsv]("Map.out")
   override val shape = FlowShape.of(in, out)
 
-  val consumeLengthHint = Some(100)
-
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
-    var callback: AsyncCallback[Seq[(Token, Tsv)]] = _
+    var callback: AsyncCallback[(Option[String],Seq[(Token, Tsv)])] = _
     var asyncCallInProgress = false
 
     private var initialToken : Token = _
@@ -72,7 +69,6 @@ class TsvSourceSideChannel(threshold : Long,
     private var buf: mutable.Queue[Option[(Token, TsvData)]] = mutable.Queue()
     private var consumeComplete = false
     private var remainingInfotons : Option[Long] = None
-    private var currConsumeState: ConsumeState = SuccessState(0)
 
     implicit val system: ActorSystem = ActorSystem.create("reactive-tools-system")
     implicit val mat: Materializer = ActorMaterializer()
@@ -84,67 +80,31 @@ class TsvSourceSideChannel(threshold : Long,
 
     override def preStart(): Unit = {
 
-      def bufferMessageAndEmulatePull(incoming: Seq[(Token, Tsv)]): Unit = {
+      def bufferTsvCallback(tokenAndTsv : (Option[String],Seq[(Token, Tsv)])): Unit = {
         asyncCallInProgress = false
-        incoming.foreach{
+
+        // Update token
+        tokenAndTsv._1.foreach{
+          currToken = _
+        }
+
+        tokenAndTsv._2.foreach{
           case (token, tsv: TsvData)=>{
             buf += Some(token,tsv)
           }
         }
 
         this.getHandler(out).onPull()
-
       }
 
-      callback = getAsyncCallback[Seq[(Token, Tsv)]](bufferMessageAndEmulatePull)
+      callback = getAsyncCallback[(Option[String],Seq[(Token, Tsv)])](bufferTsvCallback)
+
+      grabAndInvokeWithRetry(sendNextChunkRequest(initialToken))
 
     }
 
     override def postStop(): Unit = {
       logger.warn("stpop")
-    }
-
-
-    private def pushHead() = {
-      if(buf.isEmpty)
-        pullTsv()
-
-
-      if (buf.nonEmpty)
-        push(out,
-          buf.dequeue.map({ tokenAndData =>
-            PushedTsv(tokenAndData._1, tokenAndData._2, (buf.isEmpty && consumeComplete), remainingInfotons)
-          }).get
-        )
-
-
-
-    }
-
-    private def pullTsv() = {
-      if(buf.size < threshold){
-        logger.debug(
-          s"status message: buffer-size=${buf.size}, will request for more data"
-        )
-
-        // Need to think about retry logic here. Do we need it, even?
-        sendNextChunkRequest(currToken).map( { nextToken =>
-          val decoded = Try(
-            new org.joda.time.LocalDateTime(
-              Tokens.decompress(currToken).takeWhile(_ != '|').toLong
-            )
-          )
-          logger.debug(s"successfully consumed token: $currToken point in time: ${decoded
-            .getOrElse("")} buffer-size: ${buf.size}")
-          currConsumeState = ConsumeStateHandler.nextSuccess(currConsumeState)
-        }).recover{
-          case ex =>
-            currConsumeState = ConsumeStateHandler.nextFailure(currConsumeState)
-            throw ex
-        }
-
-
-      }
     }
 
     /**
@@ -161,110 +121,91 @@ class TsvSourceSideChannel(threshold : Long,
         * @return HTTP request for consuming data
         */
       def createRequestFromToken(token: String, toHint: Option[String] = None) = {
-        // create HTTP request from token
         val paramsValue = if (params.isEmpty) "" else s"&$params"
 
-        val (consumeHandler, slowBulk) = currConsumeState match {
-          case SuccessState(_) =>
-            val consumeHandler = if (isBulk) "_bulk-consume" else "_consume"
-            (consumeHandler, "")
-          case LightFailure(_, _) =>
-            val consumeHandler = if (isBulk) "_bulk-consume" else "_consume"
-            (consumeHandler, "&slow-bulk")
-          case HeavyFailure(_) =>
-            ("_consume", "&slow-bulk")
-        }
-
-        val lengthHintStr = consumeLengthHint.fold("") { chunkSize =>
-          if (consumeHandler == "_consume") "&length-hint=" + chunkSize
-          else ""
-        }
-
-        val to = toHint.map("&to-hint=" + _).getOrElse("")
+        val lengthHintStr = consumeLengthHint.fold("") { chunkSize => "&length-hint=" + chunkSize }
 
         val uri =
-          s"${formatHost(baseUrl)}/$consumeHandler?position=$token&format=tsv$paramsValue$slowBulk$to$lengthHintStr"
+          s"${formatHost(baseUrl)}/_consume?position=$token&format=tsv$paramsValue$lengthHintStr"
 
         logger.debug("send HTTP request: {}", uri)
         HttpRequest(uri = uri).addHeader(RawHeader("Accept-Encoding", "gzip"))
       }
 
-     // val source: Source[Token, (Future[Option[Token]], UniqueKillSwitch)] = {
-        val src: Source[(Option[String], Future[Seq[(Downloader.Token,Downloader.Tsv)]]),Any] =
-          Source
-            .single(createRequestFromToken(token, None))
-            .map(_ -> None)
-            .via(conn)
-            .map {
-              case (tryResponse, state) =>
-                tryResponse.map(HttpZipDecoder.decodeResponse) -> state
-            }
-            .map {
-              case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.TooManyRequests =>
-                e.discardBytes()
+      val src: Source[(Option[String], Future[Seq[(Downloader.Token,Downloader.Tsv)]]),Any] =
+        Source
+          .single(createRequestFromToken(token, None))
+          .map(_ -> None)
+          .via(conn)
+          .map {
+            case (tryResponse, state) =>
+              tryResponse.map(HttpZipDecoder.decodeResponse) -> state
+          }
+          .map {
+            case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.TooManyRequests =>
+              e.discardBytes()
 
-                logger.error(s"HTTP 429: too many requests token=$token")
-                //None -> Source.failed(new Exception("too many requests"))
-                None -> Future.failed(new Exception("too many requests"))
+              logger.error(s"HTTP 429: too many requests token=$token")
+              //None -> Source.failed(new Exception("too many requests"))
+              None -> Future.failed(new Exception("too many requests"))
 
-              case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.NoContent =>
-                e.discardBytes()
-                None -> Future.failed(new Exception("empty"))
+            case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.NoContent =>
+              e.discardBytes()
+              None -> Future.failed(new Exception("empty"))
 
-              case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.OK || s == StatusCodes.PartialContent =>
+            case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.OK || s == StatusCodes.PartialContent =>
 
-                remainingInfotons = getNLeft(h) match {
-                  case Some(HttpHeader(_, nLeft)) => Some(nLeft.toInt)
-                  case _ => None
-                }
+              remainingInfotons = getNLeft(h) match {
+                case Some(HttpHeader(_, nLeft)) => Some(nLeft.toInt)
+                case _ => None
+              }
 
-                val nextToken = getPosition(h) match {
-                  case Some(HttpHeader(_, pos)) => pos
-                  case None                     => throw new RuntimeException("no position supplied")
-                }
+              val nextToken = getPosition(h) match {
+                case Some(HttpHeader(_, pos)) => pos
+                case None                     => throw new RuntimeException("no position supplied")
+              }
 
-                logger.debug(
-                  s"received consume answer from host=${getHostnameValue(h)}"
-                )
+              logger.debug(
+                s"received consume answer from host=${getHostnameValue(h)}"
+              )
 
-                val dataSource: Source[(Token, Tsv), Any] = e
-                  .withoutSizeLimit()
-                  .dataBytes
-                  .via(lineSeparatorFrame)
-                  .map(extractTsv)
-                  .map(token -> _)
+              val dataSource: Source[(Token, Tsv), Any] = e
+                .withoutSizeLimit()
+                .dataBytes
+                .via(lineSeparatorFrame)
+                .map(extractTsv)
+                .map(token -> _)
 
-                Some(nextToken) -> dataSource.toMat(Sink.seq)(Keep.right).run()
+              Some(nextToken) -> dataSource.toMat(Sink.seq)(Keep.right).run()
 
-              case (Success(HttpResponse(s, h, e, _)), _) =>
-                e.toStrict(1.minute).onComplete {
-                  case Success(res: HttpEntity.Strict) =>
-                    logger
-                      .info(
-                        s"received consume answer from host=${getHostnameValue(
-                          h
-                        )} status=$s token=$token entity=${res.data.utf8String}"
-                      )
-                  case Failure(err) =>
-                    logger.error(
-                      s"received consume answer from host=${getHostnameValue(h)} status=$s token=$token cannot extract entity",
-                      err
+            case (Success(HttpResponse(s, h, e, _)), _) =>
+              e.toStrict(1.minute).onComplete {
+                case Success(res: HttpEntity.Strict) =>
+                  logger
+                    .info(
+                      s"received consume answer from host=${getHostnameValue(
+                        h
+                      )} status=$s token=$token entity=${res.data.utf8String}"
                     )
-                }
+                case Failure(err) =>
+                  logger.error(
+                    s"received consume answer from host=${getHostnameValue(h)} status=$s token=$token cannot extract entity",
+                    err
+                  )
+              }
 
-                Some(token) -> Future.failed(new Exception(s"Status is $s"))
+              Some(token) -> Future.failed(new Exception(s"Status is $s"))
 
-              case x =>
-                logger.error(s"unexpected message: $x")
-                Some(token) -> Future.failed(
-                  new UnsupportedOperationException(x.toString)
-                )
-            }
+            case x =>
+              logger.error(s"unexpected message: $x")
+              Some(token) -> Future.failed(
+                new UnsupportedOperationException(x.toString)
+              )
+          }
 
       src.toMat(Sink.head)(Keep.right).run
 
     }
-
 
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
@@ -274,41 +215,38 @@ class TsvSourceSideChannel(threshold : Long,
       }
     })
 
-
     setHandler(out, new OutHandler {
       override def onPull(): Unit = {
-
         if (buf.nonEmpty){
           buf.dequeue().foreach(f=>{
             val d = PushedTsv(f._1,f._2,false, Some(10))
             push(out,d)
           })
-
-
-
         }
 
-        if(buf.isEmpty && !asyncCallInProgress){
+        if(buf.size < threshold && !asyncCallInProgress){
           grabAndInvokeWithRetry(sendNextChunkRequest(currToken))
-
         }
-
-        logger.warn("test")
-
-
       }
-
     })
-
-
 
     private def grabAndInvokeWithRetry(future: Future[(Option[String], Future[Seq[(Token, Tsv)]])]): Unit = {
       asyncCallInProgress = true
       future.onComplete {
         case Success(tokenWithData) => {
           tokenWithData._2.onComplete{
-            case Success(data)=>
-             callback.invoke(data)
+            case Success(data)=> {
+              val decoded = Try(
+                new org.joda.time.LocalDateTime(
+                  Tokens.decompress(currToken).takeWhile(_ != '|').toLong
+                )
+              )
+              logger.debug(s"successfully consumed token: $currToken point in time: ${decoded
+                .getOrElse("")} buffer-size: ${buf.size}")
+
+              callback.invoke(tokenWithData._1,data)
+            }
+
             case Failure(ex)=>
               logger.error(ex.toString)
           }

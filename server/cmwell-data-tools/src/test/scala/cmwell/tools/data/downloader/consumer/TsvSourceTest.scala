@@ -39,15 +39,27 @@ class TsvSourceTest extends BaseWiremockSpec {
   }
 
 
-  val tsvs = List(
+  val tsvs1 = List(
     "path1\tlastModified1\tuuid1\tindexTime1\n",
     "path2\tlastModified2\tuuid2\tindexTime2\n"
+  )
+
+  val tsvs2 = List(
+    "path1a\tlastModified1\tuuid1\tindexTime1\n",
+    "path2a\tlastModified2\tuuid2\tindexTime2\n"
+  )
+
+  val tsvs3 = List(
+    "path1b\tlastModified1\tuuid1\tindexTime1\n",
+    "path2b\tlastModified2\tuuid2\tindexTime2\n"
   )
 
 
   it should "work" in {
 
     val downloadSuccess1 = "download-success-1"
+    val downloadSuccess2 = "download-success-2"
+    val downloadSuccess3 = "download-success-3"
 
     stubFor(get(urlPathMatching("/.*")).inScenario(scenario)
       .whenScenarioStateIs(Scenario.STARTED)
@@ -60,10 +72,30 @@ class TsvSourceTest extends BaseWiremockSpec {
     stubFor(get(urlPathMatching("/_consume")).inScenario(scenario)
       .whenScenarioStateIs(downloadSuccess1)
       .willReturn(aResponse()
-        .withBody(tsvs.mkString)
+        .withBody(tsvs1.mkString)
         .withStatus(StatusCodes.OK.intValue)
-        .withHeader(CMWELL_N, (tsvs.size).toString)
-        .withHeader(CMWELL_POSITION, "3AAAMHwv"))
+        .withHeader(CMWELL_N, (tsvs1.size).toString)
+        .withHeader(CMWELL_POSITION, "3AAAMHwvr"))
+      .willSetStateTo(downloadSuccess2)
+    )
+
+    stubFor(get(urlPathMatching("/_consume")).inScenario(scenario)
+      .whenScenarioStateIs(downloadSuccess2)
+      .willReturn(aResponse()
+        .withBody(tsvs2.mkString)
+        .withStatus(StatusCodes.OK.intValue)
+        .withHeader(CMWELL_N, (tsvs2.size).toString)
+        .withHeader(CMWELL_POSITION, "3AAAMHwvs"))
+      .willSetStateTo(downloadSuccess3)
+    )
+
+    stubFor(get(urlPathMatching("/_consume")).inScenario(scenario)
+      .whenScenarioStateIs(downloadSuccess3)
+      .willReturn(aResponse()
+        .withBody(tsvs3.mkString)
+        .withStatus(StatusCodes.OK.intValue)
+        .withHeader(CMWELL_N, (tsvs3.size).toString)
+        .withHeader(CMWELL_POSITION, "3AAAMHwvt"))
       .willSetStateTo(downloadSuccess1)
     )
 
@@ -71,26 +103,14 @@ class TsvSourceTest extends BaseWiremockSpec {
       new Downloader.Token("sqwqweq")
     }
 
-
-
     val source = Source.fromFuture(initTokenFuture)
       .via(TsvSourceSideChannel(label=Some("df"),baseUrl = s"localhost:${wireMockServer.port}",threshold = 10))
 
-
-    val result = source.take(1).map(_=>1).runFold(0)(_ + _)
+    val result = source.take(6).map(_=>1).runFold(0)(_ + _)
 
     result.flatMap{_ => 1 should be (1)}
 
-    /*
-    val future = source.take(1)
-      .toMat(Sink.seq)(Keep.right).run
-    */
 
-
-
-
-
-    //assert( future.map(_ => 1) == 1)
   }
 
 }

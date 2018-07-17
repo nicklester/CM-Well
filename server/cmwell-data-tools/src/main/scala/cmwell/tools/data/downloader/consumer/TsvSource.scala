@@ -37,7 +37,7 @@ import scala.concurrent.Future
 import scala.util.{Failure, Success, Try}
 import scala.concurrent.ExecutionContext.Implicits.global
 
-
+/*
 case class PushedTsv(token: Downloader.Token, tsv: Downloader.TsvData, horizon: Boolean, remaining: Option[Long])
 
 object TsvSource {
@@ -337,3 +337,4 @@ class TsvSource(threshold : Long,
 
 
 }
+*/
