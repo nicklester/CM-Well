@@ -21,6 +21,7 @@ import akka.stream._
 import akka.stream.scaladsl.{Keep, Sink, Source}
 import akka.stream.stage._
 import cmwell.tools.data.downloader.consumer.Downloader._
+import cmwell.tools.data.downloader.consumer.TsvSourceSideChannel.DataSource
 import cmwell.tools.data.utils.ArgsManipulations
 import cmwell.tools.data.utils.ArgsManipulations.{HttpAddress, formatHost}
 import cmwell.tools.data.utils.akka.HeaderOps.{getHostnameValue, getNLeft, getPosition}
@@ -37,7 +38,13 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 case class PushedTsv(token: Downloader.Token, tsv: Downloader.TsvData, horizon: Boolean, remaining: Option[Long])
 
+
+
+
 object TsvSourceSideChannel {
+
+  type DataSource = Source[(Token, Tsv), Any]
+
   def apply(threshold: Long = 100,
             params: String = "",
             isBulk: Boolean = false,
@@ -60,7 +67,7 @@ class TsvSourceSideChannel(threshold : Long,
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
-    var callback: AsyncCallback[(Option[String],Seq[(Token, Tsv)])] = _
+    var callback: AsyncCallback[(Option[String],DataSource)] = _
     var asyncCallInProgress = false
 
     private var initialToken : Token = _
@@ -79,26 +86,23 @@ class TsvSourceSideChannel(threshold : Long,
 
     override def preStart(): Unit = {
 
-      def bufferTsvCallback(tokenAndTsv : (Option[String],Seq[(Token, Tsv)])): Unit = {
+      def bufferFillerCallback(tokenAndTsv : (Option[String],DataSource)): Unit = {
         asyncCallInProgress = false
 
-        // Update token
         tokenAndTsv._1.foreach{
           currToken = _
         }
 
-        tokenAndTsv._2.foreach{
-          case (token, tsv: TsvData)=>{
-            buf += Some(token,tsv)
-          }
+        tokenAndTsv._2.runForeach {
+          case (a:Token,b:TsvData) => buf+=(Some(a,b))
         }
 
         this.getHandler(out).onPull()
       }
 
-      callback = getAsyncCallback[(Option[String],Seq[(Token, Tsv)])](bufferTsvCallback)
+      callback = getAsyncCallback[(Option[String],DataSource)](bufferFillerCallback)
 
-      grabAndInvokeWithRetry(sendNextChunkRequest(initialToken))
+      invokeBufferFillerCallback(sendNextChunkRequest(initialToken))
 
     }
 
@@ -111,7 +115,7 @@ class TsvSourceSideChannel(threshold : Long,
       * @param token cm-well position token to consume its data
       * @return optional next token value, otherwise None when there is no data left to be consumed
       */
-    def sendNextChunkRequest(token: String): Future[(Option[String], Future[Seq[(Downloader.Token, Downloader.Tsv)]])] = {
+    def sendNextChunkRequest(token: String): Future[(Option[String], DataSource)] = {
 
       /**
         * Creates http request for consuming data
@@ -131,7 +135,7 @@ class TsvSourceSideChannel(threshold : Long,
         HttpRequest(uri = uri).addHeader(RawHeader("Accept-Encoding", "gzip"))
       }
 
-      val src: Source[(Option[String], Future[Seq[(Downloader.Token,Downloader.Tsv)]]),Any] =
+      val src: Source[(Option[String], DataSource),Any] =
         Source
           .single(createRequestFromToken(token, None))
           .map(_ -> None)
@@ -145,12 +149,15 @@ class TsvSourceSideChannel(threshold : Long,
               e.discardBytes()
 
               logger.error(s"HTTP 429: too many requests token=$token")
-              //None -> Source.failed(new Exception("too many requests"))
-              None -> Future.failed(new Exception("too many requests"))
+
+              //None -> Future.failed(new Exception("too many requests"))
+              None -> Source.failed(new Exception("too many requests"))
 
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.NoContent =>
               e.discardBytes()
-              None -> Future.failed(new Exception("empty"))
+              consumeComplete = true
+             //None -> Future.failed(new Exception("empty"))
+              None -> Source.empty
 
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.OK || s == StatusCodes.PartialContent =>
 
@@ -175,7 +182,9 @@ class TsvSourceSideChannel(threshold : Long,
                 .map(extractTsv)
                 .map(token -> _)
 
-              Some(nextToken) -> dataSource.toMat(Sink.seq)(Keep.right).run()
+             // Some(nextToken) -> dataSource.toMat(Sink.seq)(Keep.right).run()
+
+              Some(nextToken) -> dataSource
 
             case (Success(HttpResponse(s, h, e, _)), _) =>
               e.toStrict(1.minute).onComplete {
@@ -193,11 +202,13 @@ class TsvSourceSideChannel(threshold : Long,
                   )
               }
 
-              Some(token) -> Future.failed(new Exception(s"Status is $s"))
+             // Some(token) -> Future.failed(new Exception(s"Status is $s"))
+              Some(token) -> Source.failed(new Exception(s"Status is $s"))
+
 
             case x =>
               logger.error(s"unexpected message: $x")
-              Some(token) -> Future.failed(
+              Some(token) -> Source.failed(
                 new UnsupportedOperationException(x.toString)
               )
           }
@@ -224,15 +235,17 @@ class TsvSourceSideChannel(threshold : Long,
         }
 
         if(buf.size < threshold && !asyncCallInProgress){
-          grabAndInvokeWithRetry(sendNextChunkRequest(currToken))
+          invokeBufferFillerCallback(sendNextChunkRequest(currToken))
         }
       }
     })
 
-    private def grabAndInvokeWithRetry(future: Future[(Option[String], Future[Seq[(Token, Tsv)]])]): Unit = {
+    private def invokeBufferFillerCallback(future: Future[(Option[String], DataSource)]): Unit = {
       asyncCallInProgress = true
       future.onComplete {
         case Success(tokenWithData) => {
+          callback.invoke(tokenWithData._1,tokenWithData._2)
+          /*
           tokenWithData._2.onComplete{
             case Success(data)=> {
               val decoded = Try(
@@ -249,6 +262,7 @@ class TsvSourceSideChannel(threshold : Long,
             case Failure(ex)=>
               logger.error(ex.toString)
           }
+          */
         }
         case Failure(ex) => {
             logger.error(ex.toString)

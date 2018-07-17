@@ -40,18 +40,18 @@ class TsvSourceTest extends BaseWiremockSpec {
 
 
   val tsvs1 = List(
-    "path1\tlastModified1\tuuid1\tindexTime1\n",
-    "path2\tlastModified2\tuuid2\tindexTime2\n"
+    "firsta\tlastModified1\tuuid1\tindexTime1\n",
+    "firstb\tlastModified2\tuuid2\tindexTime2\n"
   )
 
   val tsvs2 = List(
-    "path1a\tlastModified1\tuuid1\tindexTime1\n",
-    "path2a\tlastModified2\tuuid2\tindexTime2\n"
+    "seconda\tlastModified1\tuuid1\tindexTime1\n",
+    "secondb\tlastModified2\tuuid2\tindexTime2\n"
   )
 
   val tsvs3 = List(
-    "path1b\tlastModified1\tuuid1\tindexTime1\n",
-    "path2b\tlastModified2\tuuid2\tindexTime2\n"
+    "thirda\tlastModified1\tuuid1\tindexTime1\n",
+    "thirdb\tlastModified2\tuuid2\tindexTime2\n"
   )
 
 
@@ -105,6 +105,7 @@ class TsvSourceTest extends BaseWiremockSpec {
 
     val source = Source.fromFuture(initTokenFuture)
       .via(TsvSourceSideChannel(label=Some("df"),baseUrl = s"localhost:${wireMockServer.port}",threshold = 10))
+
 
     val result = source.take(6).map(_=>1).runFold(0)(_ + _)
 
