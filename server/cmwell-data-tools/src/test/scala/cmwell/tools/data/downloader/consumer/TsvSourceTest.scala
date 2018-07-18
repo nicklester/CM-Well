@@ -103,14 +103,14 @@ class TsvSourceTest extends BaseWiremockSpec {
       new Downloader.Token("sqwqweq")
     }
 
-    val source = Source.fromFuture(initTokenFuture)
-      .via(TsvSourceSideChannel(label=Some("df"),baseUrl = s"localhost:${wireMockServer.port}",threshold = 10))
+    import scala.concurrent.duration._
 
+    val source = Source.fromFuture(initTokenFuture)
+      .via(TsvSourceSideChannel(label=Some("df"),baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10))
 
     val result = source.take(6).map(_=>1).runFold(0)(_ + _)
 
     result.flatMap{_ => 1 should be (1)}
-
 
   }
 

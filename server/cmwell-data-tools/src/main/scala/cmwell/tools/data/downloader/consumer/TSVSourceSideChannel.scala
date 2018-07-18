@@ -17,9 +17,11 @@ package cmwell.tools.data.downloader.consumer
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
+import akka.pattern.after
 import akka.stream._
 import akka.stream.scaladsl.{Keep, Sink, Source}
 import akka.stream.stage._
+import cmwell.tools.data.downloader.consumer.BufferFillerActor.FinishedToken
 import cmwell.tools.data.downloader.consumer.Downloader._
 import cmwell.tools.data.downloader.consumer.TsvSourceSideChannel.DataSource
 import cmwell.tools.data.utils.ArgsManipulations
@@ -50,15 +52,16 @@ object TsvSourceSideChannel {
             isBulk: Boolean = false,
             baseUrl: String,
             consumeLengthHint: Option[Int] = Some(100),
+            retryTimeout: FiniteDuration,
             label: Option[String] = None)
-  = new TsvSourceSideChannel(threshold,params,baseUrl,consumeLengthHint,isBulk,label)
+  = new TsvSourceSideChannel(threshold,params,baseUrl,consumeLengthHint,retryTimeout,label)
 }
 
 class TsvSourceSideChannel(threshold : Long,
                 params: String = "",
                 baseUrl: String,
                 consumeLengthHint: Option[Int],
-                isBulk: Boolean = false,
+                retryTimeout: FiniteDuration,
                 label: Option[String] = None) extends GraphStage[FlowShape[Downloader.Token, ((Token,TsvData),Boolean,Option[Long])]] with DataToolsLogging {
 
   val in = Inlet[Downloader.Token]("Map.in")
@@ -87,15 +90,31 @@ class TsvSourceSideChannel(threshold : Long,
     override def preStart(): Unit = {
 
       def bufferFillerCallback(tokenAndTsv : (Option[String],DataSource)): Unit = {
-        asyncCallInProgress = false
-
-        tokenAndTsv._1.foreach{
-          currToken = _
-        }
 
         tokenAndTsv._2.runForeach {
           case (a:Token,b:TsvData) => buf+=(Some(a,b))
+        }.andThen{
+          case Success(_)=> tokenAndTsv._1.foreach{currToken=_}
+        }.andThen{
+          case Success(_) => {
+            val decoded = Try(
+              new org.joda.time.LocalDateTime(
+                Tokens.decompress(currToken).takeWhile(_ != '|').toLong
+              )
+            )
+            logger.debug(s"successfully consumed token: $currToken point in time: ${decoded
+              .getOrElse("")} buffer-size: ${buf.size}")
+          }
+        }.recover {
+          case e =>
+            logger.error(e.toString)
+
+            materializer.scheduleOnce(retryTimeout, () =>
+              invokeBufferFillerCallback(sendNextChunkRequest(initialToken)))
+
         }
+
+        asyncCallInProgress = false
 
         this.getHandler(out).onPull()
       }
@@ -245,27 +264,9 @@ class TsvSourceSideChannel(threshold : Long,
       future.onComplete {
         case Success(tokenWithData) => {
           callback.invoke(tokenWithData._1,tokenWithData._2)
-          /*
-          tokenWithData._2.onComplete{
-            case Success(data)=> {
-              val decoded = Try(
-                new org.joda.time.LocalDateTime(
-                  Tokens.decompress(currToken).takeWhile(_ != '|').toLong
-                )
-              )
-              logger.debug(s"successfully consumed token: $currToken point in time: ${decoded
-                .getOrElse("")} buffer-size: ${buf.size}")
-
-              callback.invoke(tokenWithData._1,data)
-            }
-
-            case Failure(ex)=>
-              logger.error(ex.toString)
-          }
-          */
         }
         case Failure(ex) => {
-            logger.error(ex.toString)
+          logger.error(ex.toString)
         }
       }(materializer.executionContext)
 
