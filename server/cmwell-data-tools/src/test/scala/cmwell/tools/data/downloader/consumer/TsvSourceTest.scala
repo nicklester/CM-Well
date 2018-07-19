@@ -17,14 +17,16 @@ package cmwell.tools.data.downloader.consumer
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.StatusCodes
-import akka.stream.scaladsl.Source
+import akka.stream.scaladsl.{Sink, Source}
 import akka.stream.{ActorMaterializer, Materializer}
 import cmwell.tools.data.helpers.BaseWiremockSpec
 import cmwell.tools.data.utils.akka.HeaderOps.{CMWELL_N, CMWELL_POSITION}
 import com.github.tomakehurst.wiremock.client.WireMock.{aResponse, get, stubFor, urlPathMatching}
 import com.github.tomakehurst.wiremock.stubbing.Scenario
+import akka.stream.scaladsl.Keep
+import scala.concurrent.duration._
 
-import scala.concurrent.Future
+import scala.concurrent.{Await, Future}
 
 class TsvSourceTest extends BaseWiremockSpec {
 
@@ -55,63 +57,122 @@ class TsvSourceTest extends BaseWiremockSpec {
   )
 
 
+
+
+  it should "be resilient on server errrors" in {
+
+    val downloadSuccess1 = "download-success-1"
+    val downloadFail = "download-fail"
+    val downloadSuccess3 = "download-success-3"
+
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(Scenario.STARTED)
+      .willReturn(aResponse()
+        .withBody(tsvs1.mkString)
+        .withStatus(StatusCodes.OK.intValue)
+        .withHeader(CMWELL_N, (tsvs1.size).toString)
+        .withHeader(CMWELL_POSITION, "B"))
+      .willSetStateTo(downloadFail)
+    )
+
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadFail)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.GatewayTimeout.intValue))
+      .willSetStateTo(downloadFail)
+    )
+
+    val initTokenFuture = Future{
+      new Downloader.Token("A")
+    }
+
+
+    val src = Source.fromGraph( TsvSource(initialToken=initTokenFuture,label=Some("df"),
+      baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10, consumeLengthHint = Some(10)))
+
+
+
+    val result = src.take(2).toMat(Sink.seq)(Keep.right).run()
+
+    //val result2 = result.map(_=>1).runFold(0)(_ + _)
+
+
+    result.map {
+      r=> r.size should be (2)
+    }
+
+
+
+
+
+  }
+
+
+
+
   it should "work" in {
 
     val downloadSuccess1 = "download-success-1"
     val downloadSuccess2 = "download-success-2"
     val downloadSuccess3 = "download-success-3"
 
-    stubFor(get(urlPathMatching("/.*")).inScenario(scenario)
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
       .whenScenarioStateIs(Scenario.STARTED)
-      .willReturn(aResponse()
-        .withStatus(StatusCodes.OK.intValue)
-        .withHeader(CMWELL_POSITION, "3AAAMHwv"))
-      .willSetStateTo(downloadSuccess1)
-    )
-
-    stubFor(get(urlPathMatching("/_consume")).inScenario(scenario)
-      .whenScenarioStateIs(downloadSuccess1)
       .willReturn(aResponse()
         .withBody(tsvs1.mkString)
         .withStatus(StatusCodes.OK.intValue)
         .withHeader(CMWELL_N, (tsvs1.size).toString)
-        .withHeader(CMWELL_POSITION, "3AAAMHwvr"))
+        .withHeader(CMWELL_POSITION, "B"))
       .willSetStateTo(downloadSuccess2)
     )
 
-    stubFor(get(urlPathMatching("/_consume")).inScenario(scenario)
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
       .whenScenarioStateIs(downloadSuccess2)
       .willReturn(aResponse()
         .withBody(tsvs2.mkString)
         .withStatus(StatusCodes.OK.intValue)
         .withHeader(CMWELL_N, (tsvs2.size).toString)
-        .withHeader(CMWELL_POSITION, "3AAAMHwvs"))
+        .withHeader(CMWELL_POSITION, "C"))
       .willSetStateTo(downloadSuccess3)
     )
 
-    stubFor(get(urlPathMatching("/_consume")).inScenario(scenario)
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
       .whenScenarioStateIs(downloadSuccess3)
       .willReturn(aResponse()
         .withBody(tsvs3.mkString)
         .withStatus(StatusCodes.OK.intValue)
         .withHeader(CMWELL_N, (tsvs3.size).toString)
-        .withHeader(CMWELL_POSITION, "3AAAMHwvt"))
+        .withHeader(CMWELL_POSITION, "D"))
       .willSetStateTo(downloadSuccess1)
     )
 
     val initTokenFuture = Future{
-      new Downloader.Token("sqwqweq")
+      new Downloader.Token("A")
     }
 
-    import scala.concurrent.duration._
 
-    val source = Source.fromFuture(initTokenFuture)
-      .via(TsvSourceSideChannel(label=Some("df"),baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10))
 
-    val result = source.take(6).map(_=>1).runFold(0)(_ + _)
+    //val source = Source.fromFuture(initTokenFuture)
+      //.via(TsvSourceSideChannel(label=Some("df"),baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10))
 
-    result.flatMap{_ => 1 should be (1)}
 
+    val src = Source.fromGraph( TsvSource(initialToken=initTokenFuture,label=Some("df"),
+      baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10, consumeLengthHint = Some(10)))
+
+
+
+    val result = src.take(6).toMat(Sink.seq)(Keep.right).run()
+
+    //val result2 = result.map(_=>1).runFold(0)(_ + _)
+
+
+    result.map {
+      r=> r.size should be (6)
+    }
+
+
+    //result2.flatMap{_ => 1 should be (1)}
+    //Future(1 should be (1))
   }
 
 }

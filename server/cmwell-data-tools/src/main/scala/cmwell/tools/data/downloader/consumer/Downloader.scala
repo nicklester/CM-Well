@@ -867,8 +867,9 @@ class Downloader(
                             isBulk = isBulk)
     }
 
-    Source.fromFuture(initTokenFuture).via(TsvSourceSideChannel(label=Some("df"),baseUrl = baseUrl,retryTimeout=10.seconds,threshold = 10)).filterNot(
-      downloadedInfotonData => downloadedInfotonData._1._1 !=null && downloadedInfotonData._1._2 !=null
+    Source.fromGraph(TsvSource(initialToken = initTokenFuture,label=Some("df"),baseUrl = baseUrl,params=params,retryTimeout=10.seconds,threshold = 10))
+      .filter(
+        downloadedInfotonData => downloadedInfotonData._1._1 !=null && downloadedInfotonData._1._2 !=null
     )
 
   }
