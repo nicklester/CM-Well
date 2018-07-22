@@ -90,6 +90,7 @@ class TsvSource(initialToken: Future[String],
     private val conn =
       HttpConnections.newHostConnectionPool[Option[_]](host, port, protocol)
 
+
     override def preStart(): Unit = {
 
       def bufferFillerCallback(tokenAndTsv : (Option[String],DataSource)): Unit = {
@@ -112,8 +113,8 @@ class TsvSource(initialToken: Future[String],
           case e =>
             logger.error(e.toString)
 
-            materializer.scheduleOnce(retryTimeout, () =>
-              invokeBufferFillerCallback(sendNextChunkRequest(currToken)))
+            //materializer.scheduleOnce(retryTimeout, () =>
+              //invokeBufferFillerCallback(sendNextChunkRequest(currToken)))
 
         }
 
@@ -220,6 +221,7 @@ class TsvSource(initialToken: Future[String],
             case (Success(HttpResponse(s, h, e, _)), _) =>
               e.toStrict(1.minute).onComplete {
                 case Success(res: HttpEntity.Strict) =>
+                  println("504")
                   logger
                     .info(
                       s"received consume answer from host=${getHostnameValue(
@@ -249,16 +251,24 @@ class TsvSource(initialToken: Future[String],
     }
 
     setHandler(out, new OutHandler {
+
+      override def onDownstreamFinish(): Unit = {
+        logger.info(s"demand ended. items in buffer: ${buf.size}, token: $currToken")
+        super.onDownstreamFinish
+      }
+
       override def onPull(): Unit = {
 
         if (buf.nonEmpty && isAvailable(out)){
           buf.dequeue().foreach(tokenAndData=>{
             val sensorOutput =  ((tokenAndData._1,tokenAndData._2), isHorizon(consumeComplete,buf) ,remainingInfotons)
+            logger.debug(s"successfully de-queued tsv: $currToken remaining buffer-size: ${buf.size}")
             push(out,sensorOutput)
           })
         }
 
         if(buf.size < threshold && !asyncCallInProgress && currToken !=null ){
+          logger.debug(s"buffer size: ${buf.size} is less than threshold of $threshold. Requesting more tsvs")
           invokeBufferFillerCallback(sendNextChunkRequest(currToken))
         }
       }

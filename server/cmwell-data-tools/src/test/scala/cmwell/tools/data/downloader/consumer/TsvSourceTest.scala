@@ -30,8 +30,6 @@ import scala.concurrent.{Await, Future}
 
 class TsvSourceTest extends BaseWiremockSpec {
 
-  val scenario = "scenario"
-
   implicit val system: ActorSystem = ActorSystem.create("reactive-tools-system")
   implicit val mat: Materializer = ActorMaterializer()
 
@@ -61,56 +59,88 @@ class TsvSourceTest extends BaseWiremockSpec {
 
   it should "be resilient on server errrors" in {
 
+    val scenario = "scenario"
+
     val downloadSuccess1 = "download-success-1"
-    val downloadFail = "download-fail"
-    val downloadSuccess3 = "download-success-3"
+    val downloadFail1 = "download-fail1"
+    val downloadFail2 = "download-fail2"
+    val downloadFail3 = "download-fail3"
+    val downloadFail4 = "download-fail4"
+    val downloadSuccess2 = "download-success-2"
+
 
     stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
       .whenScenarioStateIs(Scenario.STARTED)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.GatewayTimeout.intValue))
+      .willSetStateTo(downloadFail2)
+    )
+
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadFail2)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.GatewayTimeout.intValue))
+      .willSetStateTo(downloadSuccess1)
+    )
+
+
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadSuccess1)
       .willReturn(aResponse()
         .withBody(tsvs1.mkString)
         .withStatus(StatusCodes.OK.intValue)
         .withHeader(CMWELL_N, (tsvs1.size).toString)
         .withHeader(CMWELL_POSITION, "B"))
-      .willSetStateTo(downloadFail)
+      .willSetStateTo(downloadFail3)
     )
 
     stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
-      .whenScenarioStateIs(downloadFail)
+      .whenScenarioStateIs(downloadFail3)
       .willReturn(aResponse()
         .withStatus(StatusCodes.GatewayTimeout.intValue))
-      .willSetStateTo(downloadFail)
+      .willSetStateTo(downloadSuccess2)
     )
+
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadSuccess2)
+      .willReturn(aResponse()
+        .withBody(tsvs2.mkString)
+        .withStatus(StatusCodes.OK.intValue)
+        .withHeader(CMWELL_N, (tsvs2.size).toString)
+        .withHeader(CMWELL_POSITION, "C"))
+      .willSetStateTo(downloadFail4)
+    )
+
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadFail4)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.GatewayTimeout.intValue))
+    )
+
 
     val initTokenFuture = Future{
       new Downloader.Token("A")
     }
 
-
     val src = Source.fromGraph( TsvSource(initialToken=initTokenFuture,label=Some("df"),
       baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10, consumeLengthHint = Some(10)))
 
-
-
-    val result = src.take(2).toMat(Sink.seq)(Keep.right).run()
+    val result = src.take(4).toMat(Sink.seq)(Keep.right).run()
 
     //val result2 = result.map(_=>1).runFold(0)(_ + _)
 
-
     result.map {
-      r=> r.size should be (2)
+      r=> r.size should be (4)
     }
-
-
-
-
 
   }
 
 
 
 
-  it should "work" in {
+  ignore should "work" in {
+
+    val scenario = "scenario"
 
     val downloadSuccess1 = "download-success-1"
     val downloadSuccess2 = "download-success-2"
@@ -150,29 +180,16 @@ class TsvSourceTest extends BaseWiremockSpec {
       new Downloader.Token("A")
     }
 
-
-
-    //val source = Source.fromFuture(initTokenFuture)
-      //.via(TsvSourceSideChannel(label=Some("df"),baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10))
-
-
     val src = Source.fromGraph( TsvSource(initialToken=initTokenFuture,label=Some("df"),
       baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10, consumeLengthHint = Some(10)))
 
-
-
     val result = src.take(6).toMat(Sink.seq)(Keep.right).run()
-
-    //val result2 = result.map(_=>1).runFold(0)(_ + _)
-
 
     result.map {
       r=> r.size should be (6)
     }
 
 
-    //result2.flatMap{_ => 1 should be (1)}
-    //Future(1 should be (1))
   }
 
 }
