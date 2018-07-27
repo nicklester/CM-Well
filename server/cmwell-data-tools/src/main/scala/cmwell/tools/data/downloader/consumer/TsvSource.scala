@@ -53,8 +53,9 @@ object TsvSource {
             baseUrl: String,
             consumeLengthHint: Option[Int] = consumeLengthHintDefault,
             retryTimeout: FiniteDuration = retryTimeoutDefault,
+            isBulk: Boolean = false,
             label: Option[String] = None)
-  = new TsvSource(initialToken,threshold,params,baseUrl,consumeLengthHint,retryTimeout,label)
+  = new TsvSource(initialToken,threshold,params,baseUrl,consumeLengthHint,retryTimeout, isBulk, label)
 }
 
 class TsvSource(initialToken: Future[String],
@@ -63,6 +64,7 @@ class TsvSource(initialToken: Future[String],
                 baseUrl: String,
                 consumeLengthHint: Option[Int],
                 retryTimeout: FiniteDuration,
+                isBulk: Boolean,
                 label: Option[String] = None) extends GraphStage[SourceShape[((Token,TsvData),Boolean,Option[Long])]]
   with DataToolsLogging with DataToolsConfig {
 
@@ -70,7 +72,6 @@ class TsvSource(initialToken: Future[String],
   override val shape = SourceShape(out)
 
   def isHorizon(consumeComplete: Boolean, buf: mutable.Queue[Option[(Token, TsvData)]]) = consumeComplete && buf.isEmpty
-
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
@@ -81,6 +82,7 @@ class TsvSource(initialToken: Future[String],
     private var buf: mutable.Queue[Option[(Token, TsvData)]] = mutable.Queue()
     private var consumeComplete = false
     private var remainingInfotons : Option[Long] = None
+    private var currConsumeState: ConsumeState = SuccessState(0)
 
     implicit val system: ActorSystem = ActorSystem.create("data-tools")
     implicit val mat: Materializer = ActorMaterializer()
@@ -156,10 +158,21 @@ class TsvSource(initialToken: Future[String],
       def createRequestFromToken(token: String, toHint: Option[String] = None) = {
         val paramsValue = if (params.isEmpty) "" else s"&$params"
 
+        val (consumeHandler, slowBulk) = currConsumeState match {
+          case SuccessState(_) =>
+            val consumeHandler = if (isBulk) "_bulk-consume" else "_consume"
+            (consumeHandler, "")
+          case LightFailure(_, _) =>
+            val consumeHandler = if (isBulk) "_bulk-consume" else "_consume"
+            (consumeHandler, "&slow-bulk")
+          case HeavyFailure(_) =>
+            ("_consume", "&slow-bulk")
+        }
+
         val lengthHintStr = consumeLengthHint.fold("") { chunkSize => "&length-hint=" + chunkSize }
 
         val uri =
-          s"${formatHost(baseUrl)}/_consume?position=$token&format=tsv$paramsValue$lengthHintStr"
+          s"${formatHost(baseUrl)}/$consumeHandler?position=$token&format=tsv$paramsValue$slowBulk$lengthHintStr"
 
         logger.debug("send HTTP request: {}", uri)
         HttpRequest(uri = uri).addHeader(RawHeader("Accept-Encoding", "gzip"))
@@ -221,7 +234,9 @@ class TsvSource(initialToken: Future[String],
             case (Success(HttpResponse(s, h, e, _)), _) =>
               e.toStrict(1.minute).onComplete {
                 case Success(res: HttpEntity.Strict) =>
-                  println("504")
+
+                  currConsumeState = ConsumeStateHandler.nextSuccess(currConsumeState)
+
                   logger
                     .info(
                       s"received consume answer from host=${getHostnameValue(
@@ -229,6 +244,9 @@ class TsvSource(initialToken: Future[String],
                       )} status=$s token=$token entity=${res.data.utf8String}"
                     )
                 case Failure(err) =>
+
+                  currConsumeState = ConsumeStateHandler.nextFailure(currConsumeState)
+
                   logger.error(
                     s"received consume answer from host=${getHostnameValue(h)} status=$s token=$token cannot extract entity",
                     err
