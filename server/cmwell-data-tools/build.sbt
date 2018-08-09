@@ -1,5 +1,7 @@
 name := "cmwell-data-tools"
 
+scalaVersion := "2.11.1"
+
 libraryDependencies ++= {
   val dm = dependenciesManager.value
   Seq(
