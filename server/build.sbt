@@ -32,7 +32,7 @@ initialize := {
 updateOptions in Global := updateOptions.in(Global).value.withCachedResolution(true).withCircularDependencyLevel(CircularDependencyLevel.Error)
 //updateOptions := updateOptions.value.withCachedResolution(true)
 //updateOptions := updateOptions.value.withCircularDependencyLevel(CircularDependencyLevel.Error)
-scalacOptions in Global ++= Seq("-unchecked", "-feature", "-deprecation", "-target:jvm-1.8")
+scalacOptions in Global ++= Seq("-unchecked", "-feature", "-deprecation", "-target:jvm-1.7")
 cancelable in Global := true
 
 dependenciesManager in Global := {
@@ -224,7 +224,7 @@ lazy val dc            = (project in file("cmwell-dc")).enablePlugins(CMWellBuil
 lazy val cons          = (project in file("cmwell-cons")).enablePlugins(CMWellBuild)                                dependsOn(common, util, ctrl) aggregate(ws, ctrl, dc)
 lazy val pluginGremlin = (project in file("cmwell-plugin-gremlin")).enablePlugins(CMWellBuild)
 lazy val spa           = (project in file("cmwell-spa")) .enablePlugins(CMWellBuild)
-lazy val dataTools     = (project in file("cmwell-data-tools")).enablePlugins(CMWellBuild)                          dependsOn(util)
+lazy val dataTools     = (project in file("cmwell-data-tools")).enablePlugins(CMWellBuild)
 lazy val dataToolsApp  = (project in file("cmwell-data-tools-app")).enablePlugins(CMWellBuild)                      dependsOn(dataTools)
 lazy val sparqlAgent   = (project in file("cmwell-sparql-agent")).enablePlugins(CMWellBuild)                        dependsOn(dataTools, grid, util, ctrl)
 lazy val tracking      = (project in file("cmwell-tracking")).enablePlugins(CMWellBuild)                            dependsOn(util, zstore, grid, irw, ctrl)

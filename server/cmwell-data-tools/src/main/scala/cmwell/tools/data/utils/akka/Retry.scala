@@ -26,7 +26,8 @@ import cmwell.tools.data.utils.ArgsManipulations
 import cmwell.tools.data.utils.ArgsManipulations.HttpAddress
 import cmwell.tools.data.utils.akka.HeaderOps._
 import cmwell.tools.data.utils.logging.{DataToolsLogging, LabelId}
-import cmwell.util.akka.http.HttpZipDecoder
+import cmwell.tools.data.utils.akka.http.HttpZipDecoder
+
 
 import scala.collection.immutable
 import scala.concurrent.duration._

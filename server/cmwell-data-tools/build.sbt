@@ -1,5 +1,7 @@
 name := "cmwell-data-tools"
 
+scalaVersion := "2.11.1"
+
 libraryDependencies ++= {
   val dm = dependenciesManager.value
   Seq(
@@ -8,7 +10,7 @@ libraryDependencies ++= {
     dm("com.typesafe.akka", "akka-slf4j"),
     dm("net.jcazevedo", "moultingyaml"),
     dm("nl.grons", "metrics4-scala"),
-    dm("nl.grons", "metrics4-akka_a25"),
+    dm("nl.grons", "metrics4-akka_a24"),
     dm("nl.grons", "metrics4-scala-hdr"),
     dm("org.apache.commons", "commons-lang3"),
     dm("com.typesafe.scala-logging", "scala-logging"),

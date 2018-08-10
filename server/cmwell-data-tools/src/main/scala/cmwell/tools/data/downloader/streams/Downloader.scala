@@ -76,7 +76,7 @@ object Downloader extends DataToolsLogging with DataToolsConfig {
                                     op = op,
                                     length = length,
                                     recursive = recursive,
-                                    numInfotonsPerRequest)
+                                    numInfotonsPerRequest = numInfotonsPerRequest)
 
     downloader.createSourceFromQuery()
   }

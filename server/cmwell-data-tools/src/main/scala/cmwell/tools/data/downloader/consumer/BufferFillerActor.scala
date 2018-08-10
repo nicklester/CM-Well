@@ -25,10 +25,10 @@ import cmwell.tools.data.downloader.consumer.Downloader.{Token, Tsv, TsvData, Uu
 import cmwell.tools.data.utils.ArgsManipulations
 import cmwell.tools.data.utils.ArgsManipulations.{HttpAddress, formatHost}
 import cmwell.tools.data.utils.akka.HeaderOps._
+import cmwell.tools.data.utils.akka.http.HttpZipDecoder
 import cmwell.tools.data.utils.akka.{DataToolsConfig, HttpConnections, lineSeparatorFrame}
 import cmwell.tools.data.utils.logging._
 import cmwell.tools.data.utils.text.Tokens
-import cmwell.util.akka.http.HttpZipDecoder
 
 import scala.collection.mutable
 import scala.concurrent.duration.{FiniteDuration, _}
