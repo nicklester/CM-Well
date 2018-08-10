@@ -77,7 +77,7 @@ class TsvSource(initialToken: Future[String],
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
-    var callback: AsyncCallback[ConsumeResponse] = _
+    var callback : AsyncCallback[ConsumeResponse] = _
     var asyncCallInProgress = false
 
     private var currToken: Token = _
@@ -148,7 +148,7 @@ class TsvSource(initialToken: Future[String],
       }
 
       initialToken.onComplete({
-        case Success(token) => currToken=token
+        case Success(token) => currToken = token
         case Failure(e) => logger.error(
           s"failed to obtain token for=${label} ${e.getMessage}",
           throw new RuntimeException(e)
@@ -217,8 +217,6 @@ class TsvSource(initialToken: Future[String],
               ConsumeResponse(token = None, consumeComplete = false, dataSource =
                 Source.failed(new Exception("too many requests")))
 
-              //(None -> false) -> Source.failed(new Exception("too many requests"))
-
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.NoContent =>
               e.discardBytes()
 
@@ -227,9 +225,6 @@ class TsvSource(initialToken: Future[String],
               consumeComplete = true
 
               ConsumeResponse(token=None, consumeComplete = consumeComplete, dataSource = Source.empty)
-
-
-              //(None -> consumeComplete) -> Source.empty
 
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.OK || s == StatusCodes.PartialContent =>
 
@@ -259,8 +254,6 @@ class TsvSource(initialToken: Future[String],
               ConsumeResponse(token=Some(nextToken), consumeComplete = consumeComplete, dataSource =
                 dataSource)
 
-              //(Some(nextToken) -> consumeComplete) -> dataSource
-
             case (Success(HttpResponse(s, h, e, _)), _) =>
               e.toStrict(1.minute).onComplete {
                 case Success(res: HttpEntity.Strict) =>
@@ -288,8 +281,6 @@ class TsvSource(initialToken: Future[String],
               ConsumeResponse(token=Some(token), consumeComplete = consumeComplete, dataSource =
                 Source.failed(new Exception(s"Status is $s")))
 
-              //(Some(token) -> consumeComplete) -> Source.failed(new Exception(s"Status is $s"))
-
             case x =>
               logger.error(s"unexpected response: $x")
 
@@ -297,10 +288,6 @@ class TsvSource(initialToken: Future[String],
                 Source.failed(
                   new UnsupportedOperationException(x.toString)
                 ))
-              /*
-              (Some(token), consumeComplete) -> Source.failed(
-                new UnsupportedOperationException(x.toString)
-              )*/
           }
 
       src.toMat(Sink.head)(Keep.right).run
@@ -318,7 +305,7 @@ class TsvSource(initialToken: Future[String],
 
         if (buf.nonEmpty && isAvailable(out)){
           buf.dequeue().foreach(tokenAndData=>{
-            val sensorOutput =  ((tokenAndData._1,tokenAndData._2), isHorizon(consumeComplete,buf) ,remainingInfotons)
+            val sensorOutput =  ((tokenAndData._1, tokenAndData._2), isHorizon(consumeComplete,buf), remainingInfotons)
             logger.debug(s"successfully de-queued tsv: $currToken remaining buffer-size: ${buf.size}")
             push(out,sensorOutput)
           })
@@ -334,7 +321,7 @@ class TsvSource(initialToken: Future[String],
     private def invokeBufferFillerCallback(future: Future[ConsumeResponse]): Unit = {
       asyncCallInProgress = true
       future.onComplete{
-        case Success(_) =>  callback.invoke(_)
+        case Success(_) => callback.invoke(_)
         case Failure(ex) => {
           logger.error(s"TSV future failed: ${ex.toString}")
         }
