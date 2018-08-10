@@ -36,7 +36,7 @@ import scala.concurrent.Future
 import scala.util.{Failure, Success, Try}
 import scala.concurrent.ExecutionContext.Implicits.global
 
-case class PushedTsv(token: Downloader.Token, tsv: Downloader.TsvData, horizon: Boolean, remaining: Option[Long])
+case class ConsumeResponse(token: Option[String], consumeComplete: ConsumeComplete, dataSource: DataSource)
 
 object TsvSource {
 
@@ -77,7 +77,7 @@ class TsvSource(initialToken: Future[String],
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
-    var callback: AsyncCallback[((Option[String],Boolean),DataSource)] = _
+    var callback: AsyncCallback[ConsumeResponse] = _
     var asyncCallInProgress = false
 
     private var currToken: Token = _
@@ -96,25 +96,25 @@ class TsvSource(initialToken: Future[String],
 
     override def preStart(): Unit = {
 
-      def bufferFillerCallback(tokenAndTsv : ((Option[String], ConsumeComplete),DataSource)): Unit = {
+      def bufferFillerCallback(tokenAndTsv : ConsumeResponse) : Unit = {
 
         tokenAndTsv match {
-          case ((_, true), _) =>
+          case ConsumeResponse(_,true,_) =>
             // We are at consume complete, so we can periodically retry
             materializer.scheduleOnce(retryTimeout, () =>
               invokeBufferFillerCallback(sendNextChunkRequest(currToken)))
 
-          case _ =>
+          case ConsumeResponse(token, false, dataSource) =>
 
-            tokenAndTsv._2.toMat(Sink.seq)(Keep.right).run().onComplete {
+            dataSource.toMat(Sink.seq)(Keep.right).run().onComplete {
 
               case Success(tokensWithTsv) =>
 
-                tokensWithTsv.foreach{
+                tokensWithTsv.foreach {
                   case (token, tsvData: TsvData) => buf += (Some(token, tsvData))
                 }
 
-                tokenAndTsv._1._1.collect{
+                token.collect{
                   case token =>
                     currToken = token
 
@@ -135,95 +135,15 @@ class TsvSource(initialToken: Future[String],
 
               case Failure(_)=>
                 case e =>
-                  logger.error(e.toString)
+                  logger.error(s"error consuming token: ${e.toString}, buffer-size: ${buf.size}")
 
-                  materializer.scheduleOnce(retryTimeout, () =>
-                    invokeBufferFillerCallback(sendNextChunkRequest(currToken)))
+                  materializer.scheduleOnce(retryTimeout, () => new Runnable {
+                    override def run(): Unit = invokeBufferFillerCallback(sendNextChunkRequest(currToken))
+                  })
 
             }
 
         }
-
-/*
-        tokenAndTsv._2.runForeach {
-          case (token, tsvData: TsvData) => buf += (Some(token, tsvData))
-        }.andThen {
-          case Success(_) => tokenAndTsv._1._1.foreach {
-            currToken = _
-          }
-        }.andThen {
-          case Success(_) => {
-            val decoded = Try(
-              new org.joda.time.LocalDateTime(
-                Tokens.decompress(currToken).takeWhile(_ != '|').toLong
-              )
-            )
-            logger.debug(s"successfully consumed token: $currToken point in time: ${
-              decoded
-                .getOrElse("")
-            } buffer-size: ${buf.size}")
-          }
-        }.recover {
-
-          case e =>
-            logger.error(e.toString)
-
-            materializer.scheduleOnce(retryTimeout, () =>
-              invokeBufferFillerCallback(sendNextChunkRequest(currToken)))
-
-        }.andThen {
-          case _ =>
-            asyncCallInProgress = false
-            getHandler(out).onPull()
-        }
-*/
-
-
-        /*
-        tokenAndTsv match {
-
-          case ((_, false), _: DataSource) =>
-
-            tokenAndTsv._2.runForeach {
-              case (token, tsvData: TsvData) => buf += (Some(token, tsvData))
-            }.andThen {
-              case Success(_) => tokenAndTsv._1._1.foreach {
-                currToken = _
-              }
-            }.andThen {
-              case Success(_) => {
-                val decoded = Try(
-                  new org.joda.time.LocalDateTime(
-                    Tokens.decompress(currToken).takeWhile(_ != '|').toLong
-                  )
-                )
-                logger.debug(s"successfully consumed token: $currToken point in time: ${
-                  decoded
-                    .getOrElse("")
-                } buffer-size: ${buf.size}")
-              }
-            }.recover {
-
-              case e =>
-                logger.error(e.toString)
-
-                materializer.scheduleOnce(retryTimeout, () =>
-                  invokeBufferFillerCallback(sendNextChunkRequest(currToken)))
-
-            }.andThen {
-              case _ =>
-                asyncCallInProgress = false
-                getHandler(out).onPull()
-            }
-
-          case _ =>
-            // Consume complete is true, so schedule a delayed retry
-            materializer.scheduleOnce(retryTimeout, () =>
-              invokeBufferFillerCallback(sendNextChunkRequest(currToken)))
-        }
-        */
-
-
 
       }
 
@@ -235,12 +155,12 @@ class TsvSource(initialToken: Future[String],
         )
       })
 
-      callback = getAsyncCallback[((Option[String], Boolean),DataSource)](bufferFillerCallback)
+      callback = getAsyncCallback[ConsumeResponse](bufferFillerCallback)
 
     }
 
     override def postStop(): Unit = {
-      logger.warn("stpop")
+      logger.info("Stopping the TSV Source")
     }
 
     /**
@@ -248,7 +168,7 @@ class TsvSource(initialToken: Future[String],
       * @param token cm-well position token to consume its data
       * @return optional next token value, otherwise None when there is no data left to be consumed
       */
-    def sendNextChunkRequest(token: String): Future[((Option[String], Boolean), DataSource)] = {
+    def sendNextChunkRequest(token: String): Future[ConsumeResponse] = {
 
       /**
         * Creates http request for consuming data
@@ -279,7 +199,7 @@ class TsvSource(initialToken: Future[String],
         HttpRequest(uri = uri).addHeader(RawHeader("Accept-Encoding", "gzip"))
       }
 
-      val src: Source[((Option[String],Boolean), DataSource),Any] =
+      val src: Source[ConsumeResponse,Any] =
         Source
           .single(createRequestFromToken(token, None))
           .map(_ -> None)
@@ -294,7 +214,10 @@ class TsvSource(initialToken: Future[String],
 
               logger.error(s"HTTP 429: too many requests token=$token")
 
-              (None -> false) -> Source.failed(new Exception("too many requests"))
+              ConsumeResponse(token = None, consumeComplete = false, dataSource =
+                Source.failed(new Exception("too many requests")))
+
+              //(None -> false) -> Source.failed(new Exception("too many requests"))
 
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.NoContent =>
               e.discardBytes()
@@ -303,7 +226,10 @@ class TsvSource(initialToken: Future[String],
 
               consumeComplete = true
 
-              (None -> consumeComplete) -> Source.empty
+              ConsumeResponse(token=None, consumeComplete = consumeComplete, dataSource = Source.empty)
+
+
+              //(None -> consumeComplete) -> Source.empty
 
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.OK || s == StatusCodes.PartialContent =>
 
@@ -330,7 +256,10 @@ class TsvSource(initialToken: Future[String],
                 .map(extractTsv)
                 .map(token -> _)
 
-              (Some(nextToken) -> consumeComplete) -> dataSource
+              ConsumeResponse(token=Some(nextToken), consumeComplete = consumeComplete, dataSource =
+                dataSource)
+
+              //(Some(nextToken) -> consumeComplete) -> dataSource
 
             case (Success(HttpResponse(s, h, e, _)), _) =>
               e.toStrict(1.minute).onComplete {
@@ -356,13 +285,22 @@ class TsvSource(initialToken: Future[String],
 
               e.discardBytes()
 
-              (Some(token) -> consumeComplete) -> Source.failed(new Exception(s"Status is $s"))
+              ConsumeResponse(token=Some(token), consumeComplete = consumeComplete, dataSource =
+                Source.failed(new Exception(s"Status is $s")))
+
+              //(Some(token) -> consumeComplete) -> Source.failed(new Exception(s"Status is $s"))
 
             case x =>
               logger.error(s"unexpected response: $x")
+
+              ConsumeResponse(token=Some(token), consumeComplete = consumeComplete, dataSource =
+                Source.failed(
+                  new UnsupportedOperationException(x.toString)
+                ))
+              /*
               (Some(token), consumeComplete) -> Source.failed(
                 new UnsupportedOperationException(x.toString)
-              )
+              )*/
           }
 
       src.toMat(Sink.head)(Keep.right).run
@@ -393,12 +331,10 @@ class TsvSource(initialToken: Future[String],
       }
     })
 
-    private def invokeBufferFillerCallback(future: Future[((Option[String],Boolean), DataSource)]): Unit = {
+    private def invokeBufferFillerCallback(future: Future[ConsumeResponse]): Unit = {
       asyncCallInProgress = true
       future.onComplete{
-        case Success(((token, consumeComplete),tsvSource)) => {
-          callback.invoke(((token,consumeComplete),tsvSource))
-        }
+        case Success(_) =>  callback.invoke(_)
         case Failure(ex) => {
           logger.error(s"TSV future failed: ${ex.toString}")
         }
