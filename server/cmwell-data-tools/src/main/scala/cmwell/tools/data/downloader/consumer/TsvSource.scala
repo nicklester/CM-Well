@@ -99,7 +99,7 @@ class TsvSource(initialToken: Future[String],
       def bufferFillerCallback(tokenAndTsv : ConsumeResponse) : Unit = {
 
         tokenAndTsv match {
-          case ConsumeResponse(_,true,_) =>
+          case ConsumeResponse(_, true, _) =>
             // We are at consume complete, so we can periodically retry
             materializer.scheduleOnce(retryTimeout, () =>
               invokeBufferFillerCallback(sendNextChunkRequest(currToken)))
