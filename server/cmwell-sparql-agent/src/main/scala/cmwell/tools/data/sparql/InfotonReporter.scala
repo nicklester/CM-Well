@@ -135,12 +135,13 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     def createSensorJson(sensor: String, token: Token, downloadStats: Option[DownloadStats]) = {
       Json.fromFields({
         (downloadStats match {
-          case None => List(("sensor", Json.fromString(sensor)), ("token", Json.fromString(token)),
+          case None if !token.isEmpty => List(("sensor", Json.fromString(sensor)), ("token", Json.fromString(token)),
             ("position", Json.fromString( cmwell.tools.data.utils.text.Tokens.decompress(token))))
           case Some(downloadStats) =>
             List(("sensor", Json.fromString(sensor)), ("token", Json.fromString(token)),
               ("receivedInfotons", Json.fromLong(downloadStats.receivedInfotons)),
               ("position", Json.fromString( cmwell.tools.data.utils.text.Tokens.decompress(token))))
+          case _ => List.empty
         })
       }).noSpaces
     }
@@ -156,7 +157,8 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
         }) ++
         (materializedStats match {
           case Some(materialized) => {
-            List(("materializedInfotons",Json.fromLong(materialized.receivedInfotons)))
+            List(("materializedInfotons",Json.fromLong(materialized.receivedInfotons)),
+              ("totalRunningMillis", Json.fromLong(materialized.totalRunningTime)))
           }
           case None => Nil
         })
@@ -164,11 +166,15 @@ class InfotonReporter private (baseUrl: String, path: String, zStore: ZStore)(im
     }
 
     def createPayload(tokenAndStatistics: AgentTokensAndStatistics)  = {
-      (tokenAndStatistics.sensors.foldLeft(Seq.empty[String]) {
-        case (agg, (sensor, (token, downloadStats))) => agg :+ createSensorJson(sensor, token, downloadStats)
+      (tokenAndStatistics.sensors.collect({
+        case downloadStats @(_,(_,Some(_))) => downloadStats
+      }).foldLeft(Seq.empty[String]) {
+        case (agg, (sensor, (token, Some(downloadStats)))) =>
+          agg :+ createSensorJson(sensor, token, Some(downloadStats))
       } ++
         createAgentJson(tokenAndStatistics.agentIngestStats, tokenAndStatistics.materializedStats)).mkString("\n")
     }
+
 
     Source
       .single(tokenAndStatistics)
