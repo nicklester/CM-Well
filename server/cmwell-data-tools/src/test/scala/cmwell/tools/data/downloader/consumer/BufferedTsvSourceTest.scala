@@ -28,7 +28,7 @@ import scala.concurrent.duration._
 
 import scala.concurrent.{Await, Future}
 
-class TsvSourceTest extends BaseWiremockSpec {
+class BufferedTsvSourceTest extends BaseWiremockSpec {
 
   implicit val system: ActorSystem = ActorSystem.create("reactive-tools-system")
   implicit val mat: Materializer = ActorMaterializer()
@@ -127,7 +127,7 @@ class TsvSourceTest extends BaseWiremockSpec {
       new Downloader.Token("A")
     }
 
-    val src = Source.fromGraph( TsvSource(initialToken=initTokenFuture,label=Some("df"),
+    val src = Source.fromGraph( BufferedTsvSource(initialToken=initTokenFuture,label=Some("df"),
       baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10, consumeLengthHint = Some(10)))
 
     val result = src.take(4).toMat(Sink.seq)(Keep.right).run()
@@ -185,7 +185,7 @@ class TsvSourceTest extends BaseWiremockSpec {
       new Downloader.Token("A")
     }
 
-    val src = Source.fromGraph( TsvSource(initialToken=initTokenFuture,label=Some("df"),
+    val src = Source.fromGraph( BufferedTsvSource(initialToken=initTokenFuture,label=Some("df"),
       baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10, consumeLengthHint = Some(10)))
 
     val result = src.take(6).toMat(Sink.seq)(Keep.right).run()

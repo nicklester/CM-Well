@@ -16,24 +16,22 @@ package cmwell.tools.data.downloader.consumer
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.StatusCodes
-import akka.stream.scaladsl.{Sink, Source}
+import akka.stream.scaladsl.{Keep, Sink, Source}
+import akka.stream.testkit.scaladsl.TestSink
 import akka.stream.{ActorMaterializer, Materializer}
+import akka.testkit.TestProbe
+import akka.util.ByteString
+import cmwell.tools.data.downloader.consumer.BufferedTsvSource.SensorOutput
+import cmwell.tools.data.downloader.consumer.Downloader.TsvData
 import cmwell.tools.data.utils.akka.HeaderOps.{CMWELL_N, CMWELL_POSITION}
 import com.github.tomakehurst.wiremock.client.WireMock._
 import com.github.tomakehurst.wiremock.stubbing.Scenario
-import akka.stream.scaladsl.Keep
-import akka.stream.testkit.scaladsl.{TestSink, TestSource}
-import akka.testkit.TestProbe
-import akka.util.ByteString
-import cmwell.tools.data.downloader.consumer.Downloader.TsvData
-import cmwell.tools.data.downloader.consumer.TsvSource.SensorOutput
 
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.{Future, _}
 import scala.concurrent.duration._
-import scala.concurrent.{Await, Future}
-import scala.concurrent._
-import ExecutionContext.Implicits.global
 
-class TsvSourceTest3 extends BaseWireMockSpecFLat {
+class BufferedTsvSourceTest3 extends BaseWireMockSpecFLat {
 
   implicit val system: ActorSystem = ActorSystem.create("reactive-tools-system")
   implicit val mat: Materializer = ActorMaterializer()
@@ -86,7 +84,7 @@ class TsvSourceTest3 extends BaseWireMockSpecFLat {
     val initTokenFuture = Future {  new Downloader.Token("A") }
     val testProbeSink = TestSink.probe[SensorOutput]
 
-    val testSource = Source.fromGraph(TsvSource(initialToken = initTokenFuture, label = Some("df"),
+    val testSource = Source.fromGraph(BufferedTsvSource(initialToken = initTokenFuture, label = Some("df"),
       baseUrl = s"localhost:${wireMockServer.port}", retryTimeout = 10.seconds, threshold = 10, consumeLengthHint = Some(10)))
 
     testSource.toMat(testProbeSink)(Keep.right).run().ensureSubscription
@@ -160,7 +158,7 @@ class TsvSourceTest3 extends BaseWireMockSpecFLat {
       new Downloader.Token("A")
     }
 
-    val testSource = Source.fromGraph(TsvSource(initialToken = initTokenFuture, label = Some("df"),
+    val testSource = Source.fromGraph(BufferedTsvSource(initialToken = initTokenFuture, label = Some("df"),
       baseUrl = s"localhost:${wireMockServer.port}", retryTimeout = 10.seconds, threshold = 10, consumeLengthHint = Some(10)))
 
 
@@ -231,7 +229,7 @@ class TsvSourceTest3 extends BaseWireMockSpecFLat {
         lastModified = ByteString("lastModified1"),
         indexTime = ByteString("indexTime1"))), false, None)
 
-    mat.expectNext(3.seconds,expect)
+    mat.expectNext(30.seconds,expect)
 
     /* _consume is called twice. Once to put some content in the buffer on the first pull on the source. The
      second pull will emit the expected element and will call _consume again as the buffer threshold will not have
@@ -279,7 +277,7 @@ class TsvSourceTest3 extends BaseWireMockSpecFLat {
     //mat.expectNextN(12)
 
     val numberConsumeRequests = wireMockServer.findAll(getRequestedFor(urlPathMatching("/_consume"))).size
-    assert(numberConsumeRequests==3)
+    assert(numberConsumeRequests==0)
 
     mat.expectNoMessage(5.seconds)
 
