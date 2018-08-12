@@ -14,6 +14,7 @@
   */
 package cmwell.tools.data.downloader.consumer
 
+import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
@@ -21,7 +22,7 @@ import akka.stream._
 import akka.stream.scaladsl.{Keep, Sink, Source}
 import akka.stream.stage._
 import cmwell.tools.data.downloader.consumer.Downloader._
-import cmwell.tools.data.downloader.consumer.BufferedTsvSource.{ConsumeComplete, InfotonSource, SensorOutput}
+import cmwell.tools.data.downloader.consumer.BufferedTsvSource.{ConsumeResponse, SensorOutput}
 import cmwell.tools.data.utils.ArgsManipulations
 import cmwell.tools.data.utils.ArgsManipulations.{HttpAddress, formatHost}
 import cmwell.tools.data.utils.akka.HeaderOps.{getHostnameValue, getNLeft, getPosition}
@@ -35,30 +36,22 @@ import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
 
-case class ConsumeResponse(token: Option[String], consumeComplete: ConsumeComplete, infotonSource: InfotonSource)
-
 object BufferedTsvSource {
 
-  type InfotonSource = Source[(Token, Tsv), Any]
-  type ConsumeComplete = Boolean
-  type RemainingInfotons = Option[Long]
-  type SensorOutput = ((Token,TsvData), ConsumeComplete, RemainingInfotons)
+  type SensorOutput = ((Token,TsvData), Boolean, Option[Long])
 
-  val bufferLowWaterMarkDefault : Long = 100
-  val consumeLengthHintDefault : Option[Int] = Some(100)
-  val retryTimeoutDefault : FiniteDuration = 10.seconds
-  val horizonRetryTimeoutDefault : FiniteDuration = 1.minute
+  case class ConsumeResponse(token: Option[String], consumeComplete: Boolean, infotonSource: Source[(Token, Tsv), Any])
 
   def apply(initialToken: Future[String],
-            threshold: Long = bufferLowWaterMarkDefault,
+            threshold: Long ,
             params: String = "",
             baseUrl: String,
-            consumeLengthHint: Option[Int] = consumeLengthHintDefault,
-            retryTimeout: FiniteDuration = retryTimeoutDefault,
-            horizonRetryTimeout: FiniteDuration = horizonRetryTimeoutDefault,
+            consumeLengthHint: Option[Int],
+            retryTimeout: FiniteDuration,
+            horizonRetryTimeout: FiniteDuration ,
             isBulk: Boolean = false,
             label: Option[String] = None)(implicit system: ActorSystem, ec: ExecutionContext, mat: Materializer)
-  = new BufferedTsvSource(initialToken,threshold,params,baseUrl,consumeLengthHint,retryTimeout, horizonRetryTimeout, isBulk, label)
+    = new BufferedTsvSource(initialToken, threshold, params, baseUrl, consumeLengthHint, retryTimeout, horizonRetryTimeout, isBulk, label)
 }
 
 class BufferedTsvSource(initialToken: Future[String],
@@ -70,8 +63,7 @@ class BufferedTsvSource(initialToken: Future[String],
                         horizonRetryTimeout: FiniteDuration,
                         isBulk: Boolean,
                         label: Option[String] = None)(implicit system: ActorSystem, ec: ExecutionContext, mat: Materializer)
-  extends GraphStage[SourceShape[SensorOutput]]
-  with DataToolsLogging with DataToolsConfig {
+  extends GraphStage[SourceShape[SensorOutput]] with DataToolsLogging with DataToolsConfig {
 
   val out = Outlet[SensorOutput]("sensor.out")
   override val shape = SourceShape(out)
@@ -195,7 +187,7 @@ class BufferedTsvSource(initialToken: Future[String],
         HttpRequest(uri = uri).addHeader(RawHeader("Accept-Encoding", "gzip"))
       }
 
-      val src: Source[ConsumeResponse,Any] =
+      val src: Source[ConsumeResponse,NotUsed] =
         Source
           .single(createRequestFromToken(token, None))
           .map(_ -> None)
@@ -206,7 +198,7 @@ class BufferedTsvSource(initialToken: Future[String],
           }
           .map {
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.TooManyRequests =>
-              e.discardBytes()(materializer)
+              e.discardBytes()
 
               logger.error(s"HTTP 429: too many requests token=$token")
 
@@ -265,7 +257,7 @@ class BufferedTsvSource(initialToken: Future[String],
                   )
               }
 
-              e.discardBytes()(materializer)
+              e.discardBytes()
 
               ConsumeResponse(token=Some(token), consumeComplete = false, infotonSource =
                 Source.failed(new Exception(s"Status is $s")))
@@ -279,17 +271,11 @@ class BufferedTsvSource(initialToken: Future[String],
                 ))
           }
 
-      src.toMat(Sink.head)(Keep.right).run()(materializer)
+      src.toMat(Sink.head)(Keep.right).run()
 
     }
 
     setHandler(out, new OutHandler {
-
-      override def onDownstreamFinish(): Unit = {
-        logger.info(s"demand ended. items in buffer: " +
-          s"${buf.size}, token: $currentConsumeToken")
-        super.onDownstreamFinish
-      }
 
       override def onPull(): Unit = {
 
@@ -312,11 +298,10 @@ class BufferedTsvSource(initialToken: Future[String],
       asyncCallInProgress = true
       future.onComplete{
         case Success(consumeResponse) => callback.invokeWithFeedback(consumeResponse)
-        case Failure(ex) => {
-            logger.error(s"TSV source future failed: ${ex.toString}")
-            throw ex
-        }
-      }(materializer.executionContext)
+        case Failure(ex) =>
+          logger.error(s"TSV source future failed: ${ex.toString}")
+          throw ex
+      }
     }
 
   }
