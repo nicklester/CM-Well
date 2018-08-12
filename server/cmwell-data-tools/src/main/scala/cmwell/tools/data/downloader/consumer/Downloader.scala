@@ -884,8 +884,8 @@ class Downloader(
                             isBulk = isBulk)
     }
 
-    Source.fromGraph(BufferedTsvSource(initialToken = initTokenFuture,label=label,baseUrl = baseUrl,params=params,retryTimeout=10.seconds,threshold = 100,
-      consumeLengthHint = Some(3000)))
+    Source.fromGraph(BufferedTsvSource(initialToken = initTokenFuture,label=label,baseUrl = baseUrl,params=params,retryTimeout=10.seconds,threshold = 300,
+      consumeLengthHint = Some(200)))
       .filter(
         downloadedInfotonData => downloadedInfotonData._1._1 !=null && downloadedInfotonData._1._2 !=null
     )

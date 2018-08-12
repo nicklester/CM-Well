@@ -21,7 +21,7 @@ import akka.stream._
 import akka.stream.scaladsl.{Keep, Sink, Source}
 import akka.stream.stage._
 import cmwell.tools.data.downloader.consumer.Downloader._
-import cmwell.tools.data.downloader.consumer.BufferedTsvSource.{InfotonSource, ConsumeComplete, SensorOutput}
+import cmwell.tools.data.downloader.consumer.BufferedTsvSource.{ConsumeComplete, InfotonSource, SensorOutput}
 import cmwell.tools.data.utils.ArgsManipulations
 import cmwell.tools.data.utils.ArgsManipulations.{HttpAddress, formatHost}
 import cmwell.tools.data.utils.akka.HeaderOps.{getHostnameValue, getNLeft, getPosition}
@@ -32,9 +32,8 @@ import cmwell.util.akka.http.HttpZipDecoder
 
 import scala.concurrent.duration._
 import scala.collection.mutable
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
-import scala.concurrent.ExecutionContext.Implicits.global
 
 case class ConsumeResponse(token: Option[String], consumeComplete: ConsumeComplete, infotonSource: InfotonSource)
 
@@ -58,7 +57,7 @@ object BufferedTsvSource {
             retryTimeout: FiniteDuration = retryTimeoutDefault,
             horizonRetryTimeout: FiniteDuration = horizonRetryTimeoutDefault,
             isBulk: Boolean = false,
-            label: Option[String] = None)
+            label: Option[String] = None)(implicit system: ActorSystem, ec: ExecutionContext, mat: Materializer)
   = new BufferedTsvSource(initialToken,threshold,params,baseUrl,consumeLengthHint,retryTimeout, horizonRetryTimeout, isBulk, label)
 }
 
@@ -70,13 +69,23 @@ class BufferedTsvSource(initialToken: Future[String],
                         retryTimeout: FiniteDuration,
                         horizonRetryTimeout: FiniteDuration,
                         isBulk: Boolean,
-                        label: Option[String] = None) extends GraphStage[SourceShape[SensorOutput]]
+                        label: Option[String] = None)(implicit system: ActorSystem, ec: ExecutionContext, mat: Materializer)
+  extends GraphStage[SourceShape[SensorOutput]]
   with DataToolsLogging with DataToolsConfig {
 
   val out = Outlet[SensorOutput]("sensor.out")
   override val shape = SourceShape(out)
 
   def isHorizon(consumeComplete: Boolean, buf: mutable.Queue[Option[(Token, TsvData)]]) = consumeComplete && buf.isEmpty
+
+  def decodeToken(token: Token) = Try(
+    new org.joda.time.LocalDateTime(
+      Tokens.decompress(token).takeWhile(_ != '|').toLong
+    )
+  )
+
+  private val HttpAddress(protocol, host, port, _) = ArgsManipulations.extractBaseUrl(baseUrl)
+  private val conn = HttpConnections.newHostConnectionPool[Option[_]](host, port, protocol)
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
@@ -88,14 +97,6 @@ class BufferedTsvSource(initialToken: Future[String],
     private var consumeComplete = false
     private var remainingInfotons : Option[Long] = None
     private var currConsumeState: ConsumeState = SuccessState(0)
-
-    implicit val system: ActorSystem = ActorSystem.create("data-tools")
-    implicit val mat: Materializer = ActorMaterializer()
-
-    private val HttpAddress(protocol, host, port, _) =
-      ArgsManipulations.extractBaseUrl(baseUrl)
-    private val conn =
-      HttpConnections.newHostConnectionPool[Option[_]](host, port, protocol)
 
     override def preStart(): Unit = {
 
@@ -113,47 +114,31 @@ class BufferedTsvSource(initialToken: Future[String],
               invokeBufferFillerCallback(sendNextChunkRequest(currentConsumeToken)))
 
           case ConsumeResponse(token, false, dataSource) =>
-
-            dataSource.toMat(Sink.seq)(Keep.right).run().onComplete {
-
-              case Success(tokensWithTsv) =>
-
-                logger.debug(s"Consuming _consume response for ${label}. Adding ${tokensWithTsv.size} to the buffer")
-
-                tokensWithTsv.foreach {
-                  case (token, tsvData: TsvData) => buf += (Some(token, tsvData))
-                }
-
-                token.collect{
-                  case token =>
+            dataSource.runForeach {
+              case (token, tsvData: TsvData) => buf += (Some(token, tsvData))
+            }.onComplete{
+              case Success(_)=>
+                token.collect {
+                  case token=>
                     currentConsumeToken = token
 
-                    val decoded = Try(
-                      new org.joda.time.LocalDateTime(
-                        Tokens.decompress(currentConsumeToken).takeWhile(_ != '|').toLong
-                      )
-                    )
-
                     logger.debug(s"successfully consumed token: $currentConsumeToken point in time: ${
-                      decoded
-                        .getOrElse("")
+                      decodeToken(currentConsumeToken).getOrElse("")
                     } buffer-size: ${buf.size}")
                 }
 
-
                 asyncCallInProgress = false
-
                 getHandler(out).onPull()
 
-              case Failure(_)=>
-                case e =>
-                  logger.error(s"error consuming token: ${e.toString}, buffer-size: ${buf.size}. " +
-                    s"Scheduling retry in ${retryTimeout}")
+              case Failure(e)=>
+                logger.error(s"error consuming token: ${e.toString}, buffer-size: ${buf.size}. " +
+                  s"Scheduling retry in ${retryTimeout}")
 
-                  materializer.scheduleOnce(retryTimeout, () => new Runnable {
-                    override def run(): Unit = invokeBufferFillerCallback(sendNextChunkRequest(currentConsumeToken))
-                  })
+                materializer.scheduleOnce(retryTimeout, () =>
+                  invokeBufferFillerCallback(sendNextChunkRequest(currentConsumeToken))
+                )
             }
+
         }
 
       }
@@ -221,7 +206,7 @@ class BufferedTsvSource(initialToken: Future[String],
           }
           .map {
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.TooManyRequests =>
-              e.discardBytes()
+              e.discardBytes()(materializer)
 
               logger.error(s"HTTP 429: too many requests token=$token")
 
@@ -229,37 +214,39 @@ class BufferedTsvSource(initialToken: Future[String],
                 Source.failed(new Exception("too many requests")))
 
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.NoContent =>
-              e.discardBytes()
+              e.discardBytes()(materializer)
 
               logger.info(s"No more data available, setting consume complete to true")
 
               ConsumeResponse(token=None, consumeComplete = true, infotonSource = Source.empty)
 
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.OK || s == StatusCodes.PartialContent =>
+              getPosition(h) match {
+                case Some(HttpHeader(_, pos)) =>
 
-              remainingInfotons = getNLeft(h) match {
-                case Some(HttpHeader(_, nLeft)) => Some(nLeft.toInt)
-                case _ => None
+                  remainingInfotons = getNLeft(h) match {
+                    case Some(HttpHeader(_, nLeft)) => Some(nLeft.toInt)
+                    case _ => None
+                  }
+
+                  logger.debug(s"received consume answer from host=${getHostnameValue(h)}")
+
+                  val infotonSource: Source[(Token, Tsv), Any] = e
+                    .withoutSizeLimit()
+                    .dataBytes
+                    .via(lineSeparatorFrame)
+                    .map(extractTsv)
+                    .map(token -> _)
+
+                  ConsumeResponse(token=Some(pos), consumeComplete = false, infotonSource = infotonSource)
+
+                case None =>
+                  ConsumeResponse(token=Some(token), consumeComplete = false, infotonSource =
+                    Source.failed(new Exception(s"No position supplied")))
               }
-
-              val nextToken = getPosition(h) match {
-                case Some(HttpHeader(_, pos)) => pos
-                case None                     => throw new RuntimeException("no position supplied")
-              }
-
-              logger.debug(s"received consume answer from host=${getHostnameValue(h)}")
-
-              val infotonSource: Source[(Token, Tsv), Any] = e
-                .withoutSizeLimit()
-                .dataBytes
-                .via(lineSeparatorFrame)
-                .map(extractTsv)
-                .map(token -> _)
-
-              ConsumeResponse(token=Some(nextToken), consumeComplete = false, infotonSource = infotonSource)
 
             case (Success(HttpResponse(s, h, e, _)), _) =>
-              e.toStrict(1.minute).onComplete {
+              e.toStrict(1.minute)(materializer).onComplete {
                 case Success(res: HttpEntity.Strict) =>
                   currConsumeState = ConsumeStateHandler.nextSuccess(currConsumeState)
 
@@ -278,7 +265,7 @@ class BufferedTsvSource(initialToken: Future[String],
                   )
               }
 
-              e.discardBytes()
+              e.discardBytes()(materializer)
 
               ConsumeResponse(token=Some(token), consumeComplete = false, infotonSource =
                 Source.failed(new Exception(s"Status is $s")))
@@ -292,7 +279,7 @@ class BufferedTsvSource(initialToken: Future[String],
                 ))
           }
 
-      src.toMat(Sink.head)(Keep.right).run
+      src.toMat(Sink.head)(Keep.right).run()(materializer)
 
     }
 
@@ -306,7 +293,7 @@ class BufferedTsvSource(initialToken: Future[String],
 
       override def onPull(): Unit = {
 
-          if (buf.nonEmpty && isAvailable(out)){
+        if (buf.nonEmpty && isAvailable(out)){
           buf.dequeue().foreach(tokenAndData=>{
             val sensorOutput =  ((tokenAndData._1, tokenAndData._2), isHorizon(consumeComplete,buf), remainingInfotons)
             logger.debug(s"successfully de-queued tsv: $currentConsumeToken remaining buffer-size: ${buf.size}")
@@ -324,9 +311,10 @@ class BufferedTsvSource(initialToken: Future[String],
     private def invokeBufferFillerCallback(future: Future[ConsumeResponse]): Unit = {
       asyncCallInProgress = true
       future.onComplete{
-        case Success(consumeResponse) => callback.invoke(consumeResponse)
+        case Success(consumeResponse) => callback.invokeWithFeedback(consumeResponse)
         case Failure(ex) => {
-          logger.error(s"TSV future failed: ${ex.toString}")
+            logger.error(s"TSV source future failed: ${ex.toString}")
+            throw ex
         }
       }(materializer.executionContext)
     }

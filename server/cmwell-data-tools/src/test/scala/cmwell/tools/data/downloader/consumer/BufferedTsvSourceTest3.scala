@@ -77,6 +77,8 @@ class BufferedTsvSourceTest3 extends BaseWireMockSpecFLat {
 
   val downloadNoContent = "download-no-content"
 
+  val download5xx1 = "download-5xx1"
+
 
 
   lazy val createAndRunTestGraph = {
@@ -264,7 +266,7 @@ class BufferedTsvSourceTest3 extends BaseWireMockSpecFLat {
     stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
       .whenScenarioStateIs(downloadNoContent)
       .willReturn(aResponse()
-        .withStatus(StatusCodes.NoContent.intValue)
+        .withStatus(StatusCodes.InternalServerError.intValue)
         .withHeader(CMWELL_N, (0).toString)
         .withHeader(CMWELL_POSITION, "C"))
       .willSetStateTo(downloadNoContent)
@@ -283,7 +285,25 @@ class BufferedTsvSourceTest3 extends BaseWireMockSpecFLat {
 
   }
 
+  "TsvSource" should "retry on a 5xx error" in {
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadNoContent)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.InternalServerError.intValue))
+      //  .withHeader(CMWELL_N, (0).toString)
+       // .withHeader(CMWELL_POSITION, "C"))
+      .willSetStateTo(download5xx1)
+    )
 
+    val mat = createAndRunTestGraph
+
+    mat.request(20)
+    mat.expectNoMessage(60.seconds)
+
+    val numberConsumeRequests = wireMockServer.findAll(getRequestedFor(urlPathMatching("/_consume"))).size
+
+
+  }
 
 
 
