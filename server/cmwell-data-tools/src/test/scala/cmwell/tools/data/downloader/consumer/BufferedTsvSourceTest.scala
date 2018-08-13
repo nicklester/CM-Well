@@ -4,7 +4,7 @@
   * Licensed under the Apache License, Version 2.0 (the “License”); you may not use this file except in compliance with the License.
   * You may obtain a copy of the License at
   *
-  *   http://www.apache.org/licenses/LICENSE-2.0
+  * http://www.apache.org/licenses/LICENSE-2.0
   *
   * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
   * an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -12,32 +12,28 @@
   * See the License for the specific language governing permissions and
   * limitations under the License.
   */
-
 package cmwell.tools.data.downloader.consumer
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.StatusCodes
-import akka.stream.scaladsl.{Sink, Source}
+import akka.stream.scaladsl.{Keep, Source}
+import akka.stream.testkit.scaladsl.TestSink
 import akka.stream.{ActorMaterializer, Materializer}
-import cmwell.tools.data.helpers.BaseWiremockSpec
+import akka.util.ByteString
+import cmwell.tools.data.downloader.consumer.BufferedTsvSource.SensorOutput
+import cmwell.tools.data.downloader.consumer.Downloader.TsvData
 import cmwell.tools.data.utils.akka.HeaderOps.{CMWELL_N, CMWELL_POSITION}
-import com.github.tomakehurst.wiremock.client.WireMock.{aResponse, get, stubFor, urlPathMatching}
+import com.github.tomakehurst.wiremock.client.WireMock._
 import com.github.tomakehurst.wiremock.stubbing.Scenario
-import akka.stream.scaladsl.Keep
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
 import scala.concurrent.duration._
 
-import scala.concurrent.{Await, Future}
-
-class BufferedTsvSourceTest extends BaseWiremockSpec {
+class BufferedTsvSourceTest extends BaseWireMockSpecNonAsync  {
 
   implicit val system: ActorSystem = ActorSystem.create("reactive-tools-system")
   implicit val mat: Materializer = ActorMaterializer()
-
-
-
-
-
-
 
   override protected def afterAll(): Unit = {
     system.terminate()
@@ -51,7 +47,20 @@ class BufferedTsvSourceTest extends BaseWiremockSpec {
 
   val tsvs2 = List(
     "seconda\tlastModified1\tuuid1\tindexTime1\n",
-    "secondb\tlastModified2\tuuid2\tindexTime2\n"
+    "secondb\tlastModified2\tuuid2\tindexTime2\n",
+    "secondc\tlastModified2\tuuid2\tindexTime2\n",
+    "secondd\tlastModified2\tuuid2\tindexTime2\n",
+    "seconde\tlastModified2\tuuid2\tindexTime2\n",
+    "secondf\tlastModified2\tuuid2\tindexTime2\n",
+    "secondg\tlastModified2\tuuid2\tindexTime2\n",
+    "secondh\tlastModified2\tuuid2\tindexTime2\n",
+    "secondi\tlastModified2\tuuid2\tindexTime2\n",
+    "secondj\tlastModified2\tuuid2\tindexTime2\n",
+    "secondk\tlastModified2\tuuid2\tindexTime2\n",
+    "secondl\tlastModified2\tuuid2\tindexTime2\n",
+    "secondm\tlastModified2\tuuid2\tindexTime2\n",
+    "secondn\tlastModified2\tuuid2\tindexTime2\n",
+    "secondo\tlastModified2\tuuid2\tindexTime2\n"
   )
 
   val tsvs3 = List(
@@ -59,97 +68,43 @@ class BufferedTsvSourceTest extends BaseWiremockSpec {
     "thirdb\tlastModified2\tuuid2\tindexTime2\n"
   )
 
+  val scenario = "scenario"
 
+  val downloadSuccess1 = "download-success-1"
+  val downloadSuccess2 = "download-success-2"
+  val downloadSuccess3 = "download-success-3"
+  val downloadSuccess4 = "download-success-4"
 
+  val downloadNoContent = "download-no-content"
+  val download5xx1 = "download-5xx1"
 
-  it should "be resilient on server errrors" in {
+  lazy val createAndRunTestGraph = {
 
-    val scenario = "scenario"
+    val initTokenFuture = Future {  new Downloader.Token("A") }
+    val testProbeSink = TestSink.probe[SensorOutput]
 
-    val downloadSuccess1 = "download-success-1"
-    val downloadFail1 = "download-fail1"
-    val downloadFail2 = "download-fail2"
-    val downloadFail3 = "download-fail3"
-    val downloadFail4 = "download-fail4"
-    val downloadSuccess2 = "download-success-2"
+    val testSource = Source.fromGraph(BufferedTsvSource(initialToken = initTokenFuture, label = Some("df"), horizonRetryTimeout=1.seconds,
+      baseUrl = s"localhost:${wireMockServer.port}", retryTimeout = 1.seconds, threshold = 10, consumeLengthHint = Some(10)))
 
-
-    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
-      .whenScenarioStateIs(Scenario.STARTED)
-      .willReturn(aResponse()
-        .withStatus(StatusCodes.GatewayTimeout.intValue))
-      .willSetStateTo(downloadFail2)
-    )
-
-    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
-      .whenScenarioStateIs(downloadFail2)
-      .willReturn(aResponse()
-        .withStatus(StatusCodes.GatewayTimeout.intValue))
-      .willSetStateTo(downloadSuccess1)
-    )
-
-
-    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
-      .whenScenarioStateIs(downloadSuccess1)
-      .willReturn(aResponse()
-        .withBody(tsvs1.mkString)
-        .withStatus(StatusCodes.OK.intValue)
-        .withHeader(CMWELL_N, (tsvs1.size).toString)
-        .withHeader(CMWELL_POSITION, "B"))
-      .willSetStateTo(downloadFail3)
-    )
-
-    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
-      .whenScenarioStateIs(downloadFail3)
-      .willReturn(aResponse()
-        .withStatus(StatusCodes.GatewayTimeout.intValue))
-      .willSetStateTo(downloadSuccess2)
-    )
-
-    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
-      .whenScenarioStateIs(downloadSuccess2)
-      .willReturn(aResponse()
-        .withBody(tsvs2.mkString)
-        .withStatus(StatusCodes.OK.intValue)
-        .withHeader(CMWELL_N, (tsvs2.size).toString)
-        .withHeader(CMWELL_POSITION, "C"))
-      .willSetStateTo(downloadFail4)
-    )
-
-    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
-      .whenScenarioStateIs(downloadFail4)
-      .willReturn(aResponse()
-        .withStatus(StatusCodes.GatewayTimeout.intValue))
-    )
-
-
-    val initTokenFuture = Future{
-      new Downloader.Token("A")
-    }
-
-    val src = Source.fromGraph( BufferedTsvSource(initialToken=initTokenFuture,label=Some("df"),
-      baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10, consumeLengthHint = Some(10)))
-
-    val result = src.take(4).toMat(Sink.seq)(Keep.right).run()
-
-    //val result2 = result.map(_=>1).runFold(0)(_ + _)
-
-    result.map {
-      r=> r.size should be (4)
-    }
+    testSource.toMat(testProbeSink)(Keep.right).run().ensureSubscription
 
   }
 
+  "TsvSource" should "shouldn't call consume until there is demand" in {
 
+    val mat = createAndRunTestGraph
 
+    // No demand, so no message received
+    mat.expectNoMessage(5.seconds)
 
-  ignore should "work" in {
+    val numberConsumeRequests = wireMockServer.findAll(getRequestedFor(urlPathMatching("/_consume"))).size
 
-    val scenario = "scenario"
+    // No demand, so the buffer has not been populated
+    assert(numberConsumeRequests==0)
 
-    val downloadSuccess1 = "download-success-1"
-    val downloadSuccess2 = "download-success-2"
-    val downloadSuccess3 = "download-success-3"
+  }
+
+  "TsvSource" should "should call consume when there is demand and emit" in {
 
     stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
       .whenScenarioStateIs(Scenario.STARTED)
@@ -171,30 +126,132 @@ class BufferedTsvSourceTest extends BaseWiremockSpec {
       .willSetStateTo(downloadSuccess3)
     )
 
+    val mat = createAndRunTestGraph
+
+    // Apply demand
+    mat.request(1)
+
+    val expect = ((new Downloader.Token("A"),
+      TsvData(path = ByteString("firsta"),
+        uuid = ByteString("uuid1"),
+        lastModified = ByteString("lastModified1"),
+        indexTime = ByteString("indexTime1"))), false, None)
+
+    mat.expectNext(1.seconds,expect)
+
+    /* _consume is called twice. Once to put some content in the buffer on the first pull on the source. The
+     second pull will emit the expected element and will call _consume again as the buffer threshold will not have
+     bean reached. */
+    val numberConsumeRequests = wireMockServer.findAll(getRequestedFor(urlPathMatching("/_consume"))).size
+    assert(numberConsumeRequests==2)
+
+    mat.expectNoMessage(1.seconds)
+
+  }
+
+  "TsvSource" should "only call _consume when there is further demand on the source" in {
+    val mat = createAndRunTestGraph
+    mat.expectNoMessage(10.seconds)
+
+    // The buffer is full, so during this time no further consumer were requested
+    val numberConsumeRequests = wireMockServer.findAll(getRequestedFor(urlPathMatching("/_consume"))).size
+    assert(numberConsumeRequests==0)
+  }
+
+  "TsvSource" should "call _consume safely when there is demand and _consume returns 204" in {
+
     stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
       .whenScenarioStateIs(downloadSuccess3)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.NoContent.intValue)
+        .withHeader(CMWELL_N, (0).toString)
+        .withHeader(CMWELL_POSITION, "C"))
+      .willSetStateTo(downloadNoContent)
+    )
+
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadNoContent)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.InternalServerError.intValue)
+        .withHeader(CMWELL_N, (0).toString)
+        .withHeader(CMWELL_POSITION, "C"))
+      .willSetStateTo(downloadNoContent)
+    )
+
+    val mat = createAndRunTestGraph
+
+    val numberConsumeRequests = wireMockServer.findAll(getRequestedFor(urlPathMatching("/_consume"))).size
+    assert(numberConsumeRequests==0)
+
+    mat.expectNoMessage(5.seconds)
+
+  }
+
+  "TsvSource" should "retry on a 5xx error" in {
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadNoContent)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.InternalServerError.intValue))
+      .willSetStateTo(download5xx1)
+    )
+
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(download5xx1)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.InternalServerError.intValue))
+      .willSetStateTo(download5xx1)
+    )
+
+    val mat = createAndRunTestGraph
+
+    var messages = Seq[Object]()
+
+    mat.request(16).receiveWhile(5.seconds) {
+      case msg => messages = msg +: messages
+    }
+
+    messages.length shouldBe 16
+
+    val numberConsumeRequests = wireMockServer.findAll(getRequestedFor(urlPathMatching("/_consume"))).size
+
+    numberConsumeRequests shouldBe 5
+
+  }
+
+  "TsvSource" should "resume filling buffer on a 200 OK" in {
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
       .willReturn(aResponse()
         .withBody(tsvs3.mkString)
         .withStatus(StatusCodes.OK.intValue)
         .withHeader(CMWELL_N, (tsvs3.size).toString)
         .withHeader(CMWELL_POSITION, "D"))
-      .willSetStateTo(downloadSuccess1)
+      .willSetStateTo(downloadNoContent)
     )
 
-    val initTokenFuture = Future{
-      new Downloader.Token("A")
+    stubFor(get(urlPathMatching("/_consume.*")).inScenario(scenario)
+      .whenScenarioStateIs(downloadNoContent)
+      .willReturn(aResponse()
+        .withStatus(StatusCodes.InternalServerError.intValue))
+      .willSetStateTo(downloadNoContent)
+    )
+
+    val mat = createAndRunTestGraph
+
+    var messages = Seq[Object]()
+
+    mat.request(2).receiveWhile(3.seconds) {
+      case msg => messages = msg +: messages
     }
 
-    val src = Source.fromGraph( BufferedTsvSource(initialToken=initTokenFuture,label=Some("df"),
-      baseUrl = s"localhost:${wireMockServer.port}",retryTimeout=10.seconds,threshold = 10, consumeLengthHint = Some(10)))
+    messages.length shouldBe 2
 
-    val result = src.take(6).toMat(Sink.seq)(Keep.right).run()
+    val numberConsumeRequests = wireMockServer.findAll(getRequestedFor(urlPathMatching("/_consume"))).size
 
-    result.map {
-      r=> r.size should be (6)
-    }
-
+    // Source will immediately call _consume, followed by three
+    // checks on horizon every second
+    numberConsumeRequests shouldBe 4
 
   }
+
 
 }

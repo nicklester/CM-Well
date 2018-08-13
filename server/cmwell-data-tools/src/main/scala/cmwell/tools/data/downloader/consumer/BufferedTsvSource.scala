@@ -99,8 +99,8 @@ class BufferedTsvSource(initialToken: Future[String],
         tokenAndTsv match {
           case ConsumeResponse(_, true, _) =>
             // We are at consume complete, so we can periodically retry
-            logger.info(s"${label} is at horizon. Will retry at consume position ${currentConsumeToken} " +
-              s"in ${horizonRetryTimeout}")
+            logger.info(s"$label is at horizon. Will retry at consume position $currentConsumeToken " +
+              s"in $horizonRetryTimeout")
 
             materializer.scheduleOnce(horizonRetryTimeout, () =>
               invokeBufferFillerCallback(sendNextChunkRequest(currentConsumeToken)))
@@ -138,7 +138,7 @@ class BufferedTsvSource(initialToken: Future[String],
       initialToken.onComplete({
         case Success(token) => currentConsumeToken = token
         case Failure(e) => logger.error(
-          s"failed to obtain token for=${label} ${e.getMessage}",
+          s"failed to obtain token for=$label ${e.getMessage}",
           throw new RuntimeException(e)
         )
       })
@@ -148,7 +148,7 @@ class BufferedTsvSource(initialToken: Future[String],
     }
 
     override def postStop(): Unit = {
-      logger.info(s"Buffered TSV Source stopped: buffer-size: ${buf.size}, label: ${label}")
+      logger.info(s"Buffered TSV Source stopped: buffer-size: ${buf.size}, label: $label")
     }
 
     /**

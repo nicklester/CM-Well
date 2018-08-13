@@ -14,13 +14,12 @@
   */
 package cmwell.tools.data.downloader.consumer
 
-
 import com.github.tomakehurst.wiremock.WireMockServer
 import com.github.tomakehurst.wiremock.client.WireMock
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig
 import org.scalatest._
 
-trait BaseWireMockSpecFLat extends FlatSpec with Matchers with BeforeAndAfterAll with BeforeAndAfterEach{
+trait BaseWireMockSpecNonAsync extends FlatSpec with Matchers with BeforeAndAfterAll with BeforeAndAfterEach{
   val host = "localhost"
   val wireMockServer = new WireMockServer(wireMockConfig().dynamicPort())
 
