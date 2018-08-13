@@ -206,7 +206,7 @@ class BufferedTsvSource(initialToken: Future[String],
                 Source.failed(new Exception("too many requests")))
 
             case (Success(HttpResponse(s, h, e, _)), _) if s == StatusCodes.NoContent =>
-              e.discardBytes()(materializer)
+              e.discardBytes()
 
               logger.info(s"No more data available, setting consume complete to true")
 
@@ -238,7 +238,7 @@ class BufferedTsvSource(initialToken: Future[String],
               }
 
             case (Success(HttpResponse(s, h, e, _)), _) =>
-              e.toStrict(1.minute)(materializer).onComplete {
+              e.toStrict(1.minute).onComplete {
                 case Success(res: HttpEntity.Strict) =>
                   currConsumeState = ConsumeStateHandler.nextSuccess(currConsumeState)
 
