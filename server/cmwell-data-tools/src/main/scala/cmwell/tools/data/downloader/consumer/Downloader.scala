@@ -42,22 +42,23 @@ object Downloader extends DataToolsLogging with DataToolsConfig {
   private val PATH_INDEX = 0
   private val UUID_INDEX = 2
   private val numUuidsPerRequest = 25
+
   private val bufferSize =
     config.getInt("akka.http.host-connection-pool.max-connections")
 
-  val retryTimeout: FiniteDuration = {
+  val createConsumerRetryTimeout: FiniteDuration = {
     val timeoutDuration = Duration(
       config.getString("cmwell.downloader.consumer.http-retry-timeout")
     ).toCoarsest
     FiniteDuration(timeoutDuration.length, timeoutDuration.unit)
   }
 
-  val retryLimit = config.hasPath("cmwell.downloader.consumer.http-retry-limit") match {
+  val createConsumerRetryLimit = config.hasPath("cmwell.downloader.consumer.http-retry-limit") match {
     case true => Some(config.getInt("cmwell.downloader.consumer.http-retry-limit"))
     case false => None
   }
 
-  val delayFactor = config.hasPath("cmwell.downloader.consumer.http-retry-delay-factor") match {
+  val createConsumerDelayFactor = config.hasPath("cmwell.downloader.consumer.http-retry-delay-factor") match {
     case true => config.getDouble("cmwell.downloader.consumer.http-retry-delay-factor")
     case false => 1
   }
@@ -113,7 +114,7 @@ object Downloader extends DataToolsLogging with DataToolsConfig {
     val tokenFuture = Source
       .single(Seq(blank) -> None)
       .via(
-        Retry.retryHttp(retryTimeout, 1, formatHost(baseUrl), retryLimit, delayFactor)(
+        Retry.retryHttp(createConsumerRetryTimeout, 1, formatHost(baseUrl), createConsumerRetryLimit, createConsumerDelayFactor)(
           _ => HttpRequest(uri = uri)
         )
       )
@@ -872,6 +873,25 @@ class Downloader(
     implicit ec: ExecutionContext
   ): Source[((Token, TsvData), Boolean, Option[Long]), NotUsed] = {
 
+    val errorRetryTimeout: FiniteDuration = {
+      val timeoutDuration = Duration(
+        config.getString("infoton-source.buffer.http-error-retry-timeout")
+      ).toCoarsest
+      FiniteDuration(timeoutDuration.length, timeoutDuration.unit)
+    }
+
+    val consumeCompleteRetryTimeout: FiniteDuration = {
+      val timeoutDuration = Duration(
+        config.getString("infoton-source.buffer.http-horizon-retry-timeout")
+      ).toCoarsest
+      FiniteDuration(timeoutDuration.length, timeoutDuration.unit)
+    }
+
+    val lowWaterMark = config.hasPath("infoton-source.buffer.low-water-mark") match {
+      case true => config.getLong("infoton-source.buffer.low-water-mark")
+      case false => 300
+    }
+
     val initTokenFuture = token match {
       case Some(t) => Future.successful(t)
       case None =>
@@ -884,12 +904,19 @@ class Downloader(
                             isBulk = isBulk)
     }
 
-    Source.fromGraph(BufferedTsvSource(initialToken = initTokenFuture, label=label, baseUrl = baseUrl,
-      params=params, retryTimeout=2.minute, threshold = 300,
-      consumeLengthHint = Some(200), horizonRetryTimeout = 1.minute, isBulk = false))
+    Source.fromGraph(BufferedTsvSource(initTokenFuture,
+            lowWaterMark,
+            params,
+            baseUrl,
+            Some(300),
+            errorRetryTimeout,
+            consumeCompleteRetryTimeout,
+            false,
+            label))
       .filter(
         downloadedInfotonData => downloadedInfotonData._1._1 !=null && downloadedInfotonData._1._2 !=null
-    )
+      )
+
 
   }
 }
