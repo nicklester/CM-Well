@@ -111,12 +111,12 @@ class SparqlProcessorNew[T](baseUrl: String,
                        }))
                 ) match {
                   case Success(paq) =>
-                    Try(paq.evaluate(jarsImporter, queriesImporter, sourcesImporter)) match {
+                    Try(paq.evaluate(jarsImporter, queriesImporter, sourcesImporter))/* match {
                       case Success(queryResults) =>
                         queryResults.onComplete {
                           case Success(result) => result
                           case Failure(err) => throw err
-                        }
+                        }*/
 
                     }
                 }
