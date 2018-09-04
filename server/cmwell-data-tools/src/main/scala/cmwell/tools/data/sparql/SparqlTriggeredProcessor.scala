@@ -301,13 +301,13 @@ class SparqlTriggeredProcessor(config: Config,
         addStatsToSource(
           id = SparqlTriggeredProcessor.sparqlMaterializerLabel,
           initialDownloadStats = tokensAndStatistics.materializedStats,
-          source = SparqlProcessor.createSparqlSourceFromPaths(
+          source = SparqlProcessorNew.createSparqlSourceFromPaths(
             baseUrl = baseUrl,
             sparqlQuery = processedConfig.sparqlMaterializer,
-            spQueryParamsBuilder = (p: Seq[String]) => {
-              "sp.pid=" + p.head.substring(p.head.lastIndexOf('-') + 1) +
-                "&sp.path=" + p.head.substring(p.head.lastIndexOf('/') + 1)
-            },
+           // spQueryParamsBuilder = (p: Seq[String]) => {
+           //   "sp.pid=" + p.head.substring(p.head.lastIndexOf('-') + 1) +
+           //     "&sp.path=" + p.head.substring(p.head.lastIndexOf('/') + 1)
+          //  },
             source = sensorSource,
             isNeedWrapping = false,
             label = Some(

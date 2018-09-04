@@ -259,7 +259,7 @@ object PopulateAndQuery extends LazyLogging {
     case "xml"   => "application/xml;charset=UTF8"
     case "json"  => "application/json;charset=UTF8"
     case _       => "text/plain;charset=UTF8"
-  }§
+  }
 
   implicit val system: ActorSystem = Grid.system
   implicit val materializer = ActorMaterializer()
